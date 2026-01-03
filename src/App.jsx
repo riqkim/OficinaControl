@@ -27,7 +27,8 @@ import {
   FileSpreadsheet,
   LogOut,
   Lock,
-  User
+  User,
+  FileText
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -87,7 +88,7 @@ const Badge = ({ status }) => {
   );
 };
 
-// --- Helpers de Data Robustos (CORRIGIDO PARA EXCEL) ---
+// --- Helpers de Data Robustos ---
 
 const parseDate = (value) => {
   if (!value) return new Date(); 
@@ -95,14 +96,7 @@ const parseDate = (value) => {
 
   // Serial do Excel (Número)
   if (typeof value === 'number') {
-    // 1. Converte o número serial do Excel para uma data UTC
-    // O Excel conta dias a partir de ~1900. O JS a partir de 1970.
-    // O ajuste 25569 é a diferença de dias. Multiplica por 86400000 para ms.
     const utcDate = new Date(Math.round((value - 25569) * 86400 * 1000));
-    
-    // 2. IMPORTANTE: Extrai o Ano/Mês/Dia exato que o Excel quis dizer (UTC)
-    // e cria uma NOVA data local forçada para o MEIO-DIA (12:00).
-    // Isso evita que o fuso horário (ex: -3h) jogue a data para o dia anterior.
     return new Date(
       utcDate.getUTCFullYear(),
       utcDate.getUTCMonth(),
@@ -114,27 +108,18 @@ const parseDate = (value) => {
   // String (Texto)
   if (typeof value === 'string') {
     const cleanValue = value.trim();
-    // Formato YYYY-MM-DD (Padrão ISO ou Input HTML)
     if (cleanValue.includes('-')) {
-      const parts = cleanValue.split('-'); // [2026, 01, 02]
+      const parts = cleanValue.split('-'); 
       if (parts.length === 3) {
-        // O dia pode vir com "T..." (ex: 02T00:00:00), então usamos parseInt para pegar só o número
         const day = parseInt(parts[2], 10);
         return new Date(parts[0], parts[1] - 1, day, 12, 0, 0);
       }
     }
-    // Formato DD/MM/YYYY (Padrão Brasileiro)
     if (cleanValue.includes('/')) {
-      const parts = cleanValue.split('/'); // [02, 01, 2026]
+      const parts = cleanValue.split('/'); 
       if (parts.length === 3) {
-        // Se o ano for o último (DD/MM/YYYY)
-        if (parts[2].length === 4) {
-           return new Date(parts[2], parts[1] - 1, parts[0], 12, 0, 0);
-        }
-        // Se o ano for o primeiro (YYYY/MM/DD) - Raro mas acontece
-        if (parts[0].length === 4) {
-           return new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0);
-        }
+        if (parts[2].length === 4) return new Date(parts[2], parts[1] - 1, parts[0], 12, 0, 0);
+        if (parts[0].length === 4) return new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0);
       }
     }
   }
@@ -278,12 +263,24 @@ export default function App() {
 
   const fileInputRef = useRef(null);
 
+  // Carregar Bibliotecas Externas
   useEffect(() => {
-    const script = document.createElement('script');
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-    script.async = true;
-    document.body.appendChild(script);
-    return () => { document.body.removeChild(script); }
+    // XLSX
+    const scriptXLSX = document.createElement('script');
+    scriptXLSX.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    scriptXLSX.async = true;
+    document.body.appendChild(scriptXLSX);
+
+    // JSPDF
+    const scriptPDF = document.createElement('script');
+    scriptPDF.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+    scriptPDF.async = true;
+    document.body.appendChild(scriptPDF);
+
+    return () => { 
+      document.body.removeChild(scriptXLSX);
+      document.body.removeChild(scriptPDF);
+    }
   }, []);
 
   useEffect(() => {
@@ -343,6 +340,108 @@ export default function App() {
   const handleLogout = async () => {
     await signOut(auth);
     setActiveTab('production');
+  };
+
+  // --- PDF Generation (Relatório de Atrasos) ---
+  const handleGenerateLateReport = () => {
+    if (!window.jspdf) {
+      alert("Carregando biblioteca PDF... Tente novamente em alguns segundos.");
+      return;
+    }
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const now = new Date();
+    
+    // 1. Filtrar e Agrupar Atrasados
+    const lateBatches = batches.filter(b => {
+      // Ignora concluídos
+      if (b.status === 'Concluído') return false;
+      // Checa data
+      if (!b.dateExpected) return false;
+      // Compara apenas dia/mês/ano para evitar problemas de hora
+      const dExpected = new Date(b.dateExpected);
+      dExpected.setHours(23, 59, 59, 999);
+      return dExpected < now;
+    });
+
+    if (lateBatches.length === 0) {
+      alert("Nenhum corte atrasado encontrado para gerar relatório.");
+      return;
+    }
+
+    const grouped = {};
+    lateBatches.forEach(b => {
+      const w = b.workshop || 'SEM OFICINA';
+      if (!grouped[w]) grouped[w] = [];
+      grouped[w].push(b);
+    });
+
+    // 2. Montar PDF
+    doc.setFontSize(18);
+    doc.text(`Relatório de Atrasos - OficinaControl`, 14, 20);
+    doc.setFontSize(10);
+    doc.text(`Gerado em: ${now.toLocaleDateString('pt-BR')} às ${now.toLocaleTimeString('pt-BR')}`, 14, 28);
+    
+    let yPos = 40;
+
+    Object.keys(grouped).sort().forEach(workshop => {
+      // Verificar quebra de página
+      if (yPos > 270) {
+        doc.addPage();
+        yPos = 20;
+      }
+
+      // Cabeçalho da Oficina
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.setFillColor(240, 240, 240); // Fundo cinza leve
+      doc.rect(14, yPos - 5, 182, 8, 'F');
+      doc.text(workshop, 16, yPos);
+      yPos += 10;
+
+      // Lista de Refs
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+
+      grouped[workshop].forEach(batch => {
+        if (yPos > 280) {
+          doc.addPage();
+          yPos = 20;
+        }
+
+        const pending = batch.quantitySent - (batch.totalReceived || 0) - (batch.totalWaste || 0);
+        const diffTime = Math.abs(now - batch.dateExpected);
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+        
+        const line = `Ref: ${batch.ref} | Col: ${batch.collectionName} | Falta: ${pending} pçs`;
+        const line2 = `Saída: ${batch.dateSent ? batch.dateSent.toLocaleDateString('pt-BR') : '-'} | Prev: ${batch.dateExpected ? batch.dateExpected.toLocaleDateString('pt-BR') : '-'} | Atraso: ${diffDays} dias`;
+
+        doc.text(line, 16, yPos);
+        doc.text(line2, 120, yPos); // Alinha datas à direita na mesma linha se der, ou em baixo
+        // Ajuste simples para caber tudo
+        // Vamos fazer duas linhas para ficar limpo
+        // Linha 1: Ref e Qtd
+        // Linha 2: Datas e Atraso (em vermelho se possivel, mas vamos manter simples)
+        
+        yPos += 5;
+        doc.setFontSize(9);
+        doc.setTextColor(100);
+        doc.text(line2, 16, yPos);
+        doc.setTextColor(0);
+        doc.setFontSize(10);
+        
+        yPos += 8;
+        
+        // Linha divisória fina
+        doc.setDrawColor(230);
+        doc.line(16, yPos - 4, 190, yPos - 4);
+      });
+      
+      yPos += 5; // Espaço entre oficinas
+    });
+
+    doc.save(`Relatorio_Atrasos_${now.toISOString().split('T')[0]}.pdf`);
   };
 
   // --- Excel Export ---
@@ -533,7 +632,10 @@ export default function App() {
       return a.name.localeCompare(b.name);
     });
     
-    return { sent, rcv, receivedBatchesCount: rcvBatches.size, pendP, pendB, waste, val, avgVal: pendP > 0 ? (val/pendP) : 0, lateBatches, latePieces, ranking: filteredRanking };
+    // MÉTRICA NOVA: Média de Peças por Corte
+    const avgPiecesPerBatch = rcvBatches.size > 0 ? (rcv / rcvBatches.size) : 0;
+
+    return { sent, rcv, receivedBatchesCount: rcvBatches.size, avgPiecesPerBatch, pendP, pendB, waste, val, avgVal: pendP > 0 ? (val/pendP) : 0, lateBatches, latePieces, ranking: filteredRanking };
   }, [batches, dashFilters, dashPeriod, customRange, perfSearch, perfSort]);
 
   const filteredProduction = useMemo(() => {
@@ -648,7 +750,7 @@ export default function App() {
               </Card>
               <Card className="p-4 border-l-4 border-l-emerald-500">
                 <div className="flex justify-between items-start">
-                  <div><p className="text-xs text-slate-500 font-bold uppercase">Recebidas (Boas)</p><h3 className="text-xl font-bold text-emerald-600 mt-1">{dashboardData.rcv}</h3><p className="text-[10px] text-emerald-600">Em {dashboardData.receivedBatchesCount} cortes</p></div><CheckCircle className="w-6 h-6 text-emerald-100" />
+                  <div><p className="text-xs text-slate-500 font-bold uppercase">Recebidas (Boas)</p><h3 className="text-xl font-bold text-emerald-600 mt-1">{dashboardData.rcv}</h3><p className="text-[10px] text-emerald-600">Média: {Math.round(dashboardData.avgPiecesPerBatch)} / corte</p></div><CheckCircle className="w-6 h-6 text-emerald-100" />
                 </div>
               </Card>
             </div>
@@ -707,6 +809,8 @@ export default function App() {
                     <input type="text" placeholder="Buscar Ref ou Oficina..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full pl-9 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-emerald-500 bg-white text-slate-900 text-sm" style={{ backgroundColor: '#ffffff' }} />
                   </div>
                   <button onClick={() => setShowOnlyLate(!showOnlyLate)} className={`px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition border ${showOnlyLate ? 'bg-red-50 text-red-600 border-red-200' : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-50'}`} style={!showOnlyLate ? { backgroundColor: '#ffffff' } : {}}><AlertCircle className="w-4 h-4" /> <span className="hidden md:inline">Apenas Atrasados</span></button>
+                  {/* Botão Novo: Gerar Relatório de Atrasos PDF */}
+                  <button onClick={handleGenerateLateReport} className="px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition border bg-white text-slate-500 border-slate-300 hover:bg-slate-50" style={{ backgroundColor: '#ffffff' }} title="Exportar Atrasados em PDF"><FileText className="w-4 h-4" /> <span className="hidden md:inline">Relatório Atrasos</span></button>
                 </div>
 
                 <div className="w-full md:w-auto bg-white p-2 rounded-lg border border-slate-200 shadow-sm flex flex-wrap gap-2 items-end" style={{ backgroundColor: '#ffffff' }}>
