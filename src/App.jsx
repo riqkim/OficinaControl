@@ -87,24 +87,55 @@ const Badge = ({ status }) => {
   );
 };
 
-// --- Helpers de Data Robustos ---
+// --- Helpers de Data Robustos (CORRIGIDO PARA EXCEL) ---
 
 const parseDate = (value) => {
   if (!value) return new Date(); 
   if (value instanceof Date) return value;
-  // Serial do Excel
+
+  // Serial do Excel (Número)
   if (typeof value === 'number') {
-    return new Date(Math.round((value - 25569) * 86400 * 1000));
+    // 1. Converte o número serial do Excel para uma data UTC
+    // O Excel conta dias a partir de ~1900. O JS a partir de 1970.
+    // O ajuste 25569 é a diferença de dias. Multiplica por 86400000 para ms.
+    const utcDate = new Date(Math.round((value - 25569) * 86400 * 1000));
+    
+    // 2. IMPORTANTE: Extrai o Ano/Mês/Dia exato que o Excel quis dizer (UTC)
+    // e cria uma NOVA data local forçada para o MEIO-DIA (12:00).
+    // Isso evita que o fuso horário (ex: -3h) jogue a data para o dia anterior.
+    return new Date(
+      utcDate.getUTCFullYear(),
+      utcDate.getUTCMonth(),
+      utcDate.getUTCDate(),
+      12, 0, 0
+    );
   }
-  // String
+
+  // String (Texto)
   if (typeof value === 'string') {
-    if (value.includes('-')) {
-      const parts = value.split('-');
-      if (parts.length === 3) return new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0);
+    const cleanValue = value.trim();
+    // Formato YYYY-MM-DD (Padrão ISO ou Input HTML)
+    if (cleanValue.includes('-')) {
+      const parts = cleanValue.split('-'); // [2026, 01, 02]
+      if (parts.length === 3) {
+        // O dia pode vir com "T..." (ex: 02T00:00:00), então usamos parseInt para pegar só o número
+        const day = parseInt(parts[2], 10);
+        return new Date(parts[0], parts[1] - 1, day, 12, 0, 0);
+      }
     }
-    if (value.includes('/')) {
-      const parts = value.split('/');
-      if (parts.length === 3) return new Date(parts[2], parts[1] - 1, parts[0], 12, 0, 0);
+    // Formato DD/MM/YYYY (Padrão Brasileiro)
+    if (cleanValue.includes('/')) {
+      const parts = cleanValue.split('/'); // [02, 01, 2026]
+      if (parts.length === 3) {
+        // Se o ano for o último (DD/MM/YYYY)
+        if (parts[2].length === 4) {
+           return new Date(parts[2], parts[1] - 1, parts[0], 12, 0, 0);
+        }
+        // Se o ano for o primeiro (YYYY/MM/DD) - Raro mas acontece
+        if (parts[0].length === 4) {
+           return new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0);
+        }
+      }
     }
   }
   return new Date();
@@ -161,25 +192,51 @@ const LoginScreen = ({ onLogin, loading, error }) => {
               <AlertCircle className="w-4 h-4" /> {error}
             </div>
           )}
+          
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
             <div className="relative">
               <User className="absolute left-3 top-3 w-5 h-5 text-slate-400" />
-              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full pl-10 p-3 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none transition" placeholder="seu@email.com" style={{ backgroundColor: '#ffffff' }} />
+              <input 
+                type="email" 
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full pl-10 p-3 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none transition"
+                placeholder="seu@email.com"
+                style={{ backgroundColor: '#ffffff' }}
+              />
             </div>
           </div>
+
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Senha</label>
             <div className="relative">
               <Lock className="absolute left-3 top-3 w-5 h-5 text-slate-400" />
-              <input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} className="w-full pl-10 p-3 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none transition" placeholder="••••••••" style={{ backgroundColor: '#ffffff' }} />
+              <input 
+                type="password" 
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full pl-10 p-3 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none transition"
+                placeholder="••••••••"
+                style={{ backgroundColor: '#ffffff' }}
+              />
             </div>
           </div>
-          <button type="submit" disabled={loading} className="w-full bg-emerald-600 text-white py-3 rounded-lg font-bold hover:bg-emerald-700 transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-200">
-            {loading ? 'Entrando...' : 'Acessar Sistema'} {!loading && <ArrowRight className="w-4 h-4" />}
+
+          <button 
+            type="submit" 
+            disabled={loading}
+            className="w-full bg-emerald-600 text-white py-3 rounded-lg font-bold hover:bg-emerald-700 transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-200"
+          >
+            {loading ? 'Entrando...' : 'Acessar Sistema'}
+            {!loading && <ArrowRight className="w-4 h-4" />}
           </button>
         </form>
-        <div className="bg-slate-50 p-4 text-center text-xs text-slate-400 border-t border-slate-100">OficinaControl v2.0</div>
+        <div className="bg-slate-50 p-4 text-center text-xs text-slate-400 border-t border-slate-100">
+          OficinaControl v2.0
+        </div>
       </div>
     </div>
   );
@@ -202,6 +259,7 @@ export default function App() {
   const [isReceiveModalOpen, setIsReceiveModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isEditReturnModalOpen, setIsEditReturnModalOpen] = useState(false);
+  
   const [selectedBatch, setSelectedBatch] = useState(null);
   const [selectedReturnIndex, setSelectedReturnIndex] = useState(null);
 
@@ -209,8 +267,10 @@ export default function App() {
   const [dashFilters, setDashFilters] = useState({ collection: '', fabric: '', workshop: '' });
   const [dashPeriod, setDashPeriod] = useState('all'); 
   const [customRange, setCustomRange] = useState({ start: '', end: '' });
+  
   const [perfSearch, setPerfSearch] = useState('');
   const [perfSort, setPerfSort] = useState('volume_desc');
+
   const [prodFilters, setProdFilters] = useState({ collection: '', workshop: '', dateSent: '', dateExpected: '' });
   const [prodSort, setProdSort] = useState('created_desc');
   const [showOnlyLate, setShowOnlyLate] = useState(false);
@@ -233,6 +293,7 @@ export default function App() {
       }
     };
     initAuth();
+
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setAuthLoading(false);
@@ -248,6 +309,7 @@ export default function App() {
     if (!user) return;
     setDataLoading(true);
     const q = collection(db, 'artifacts', appId, 'users', user.uid, 'production_batches');
+    
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -258,17 +320,30 @@ export default function App() {
       }));
       setBatches(data);
       setDataLoading(false);
-    }, (error) => { console.error("Erro:", error); setDataLoading(false); });
+    }, (error) => {
+      console.error("Erro:", error);
+      setDataLoading(false);
+    });
     return () => unsubscribe();
   }, [user]);
 
   // --- Auth Actions ---
   const handleLogin = async (email, password) => {
-    setLoginError(''); setAuthLoading(true);
-    try { await signInWithEmailAndPassword(auth, email, password); } 
-    catch (error) { setLoginError("Falha no login. Verifique suas credenciais."); setAuthLoading(false); }
+    setLoginError('');
+    setAuthLoading(true);
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (error) {
+      console.error(error);
+      setLoginError("Falha no login. Verifique suas credenciais.");
+      setAuthLoading(false);
+    }
   };
-  const handleLogout = async () => { await signOut(auth); setActiveTab('production'); };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+    setActiveTab('production');
+  };
 
   // --- Excel Export ---
   const handleExportExcel = () => {
@@ -312,14 +387,13 @@ export default function App() {
         
         for (const row of data) {
           try {
-            // Normalização Agressiva das chaves (remove _, espaços e lowercase)
+            // Normalização Agressiva das chaves
             const normalizedRow = {};
             Object.keys(row).forEach(key => {
               const cleanKey = key.toString().trim().toLowerCase().replace(/[_\s]/g, '');
               normalizedRow[cleanKey] = row[key];
             });
 
-            // Validação mínima
             if (!normalizedRow['colecao'] || !normalizedRow['oficina'] || !normalizedRow['ref']) {
               console.warn("Linha pulada - dados incompletos:", row);
               continue;
@@ -351,7 +425,6 @@ export default function App() {
             let finalStatus = 'Pendente';
             
             if (statusImported) {
-               // Mapeia para status válidos ou mantem o da planilha
                finalStatus = statusImported;
             } else {
                const missing = qtdEnviada - totalReceived - totalWaste;
