@@ -342,7 +342,23 @@ export default function App() {
     setActiveTab('production');
   };
 
-  // --- PDF Generation (Relatório de Atrasos) ---
+  // --- LOGICAS FILTRADAS ---
+  
+  // Lista Filtrada de Produção (Memoized)
+  const filteredProduction = useMemo(() => {
+    let r = batches.filter(b => (prodFilters.workshop ? b.workshop === prodFilters.workshop : true) && (prodFilters.collection ? b.collectionName === prodFilters.collection : true) && (prodFilters.dateSent ? formatDateForInput(b.dateSent) === prodFilters.dateSent : true) && (prodFilters.dateExpected ? formatDateForInput(b.dateExpected) === prodFilters.dateExpected : true) && (searchTerm ? (b.ref.includes(searchTerm.toUpperCase()) || b.workshop.includes(searchTerm.toUpperCase())) : true) && (showOnlyLate ? (b.dateExpected && new Date() > b.dateExpected && b.status !== 'Concluído') : true));
+    r.sort((a, b) => {
+      if (prodSort === 'created_desc') return b.createdAt - a.createdAt;
+      const dA_S = a.dateSent || new Date(0), dB_S = b.dateSent || new Date(0);
+      const dA_E = a.dateExpected || new Date(0), dB_E = b.dateExpected || new Date(0);
+      if (prodSort === 'sent_asc') return dA_S - dB_S; if (prodSort === 'sent_desc') return dB_S - dA_S;
+      if (prodSort === 'exp_asc') return dA_E - dB_E; if (prodSort === 'exp_desc') return dB_E - dA_E;
+      return 0;
+    });
+    return r;
+  }, [batches, prodFilters, searchTerm, prodSort, showOnlyLate]);
+
+  // --- PDF Generation (Relatório de Atrasos - BASEADO NOS FILTROS) ---
   const handleGenerateLateReport = () => {
     if (!window.jspdf) {
       alert("Carregando biblioteca PDF... Tente novamente em alguns segundos.");
@@ -353,8 +369,9 @@ export default function App() {
     const doc = new jsPDF();
     const now = new Date();
     
-    // 1. Filtrar e Agrupar Atrasados
-    const lateBatches = batches.filter(b => {
+    // 1. Filtrar Atrasados a partir da LISTA JÁ FILTRADA NA TELA
+    // Isso garante que se o usuário filtrou por "Oficina X", o PDF só mostre "Oficina X".
+    const lateBatches = filteredProduction.filter(b => {
       // Ignora concluídos
       if (b.status === 'Concluído') return false;
       // Checa data
@@ -366,7 +383,7 @@ export default function App() {
     });
 
     if (lateBatches.length === 0) {
-      alert("Nenhum corte atrasado encontrado para gerar relatório.");
+      alert("Nenhum corte atrasado encontrado com os filtros atuais.");
       return;
     }
 
@@ -379,23 +396,29 @@ export default function App() {
 
     // 2. Montar PDF
     doc.setFontSize(18);
-    doc.text(`Relatório de Atrasos - OficinaControl`, 14, 20);
+    doc.text(`Relatório de Atrasos`, 14, 20);
     doc.setFontSize(10);
     doc.text(`Gerado em: ${now.toLocaleDateString('pt-BR')} às ${now.toLocaleTimeString('pt-BR')}`, 14, 28);
     
-    let yPos = 40;
+    // Mostrar filtros aplicados no cabeçalho do PDF
+    let filterText = "Filtros aplicados: ";
+    const activeFilters = [];
+    if(prodFilters.collection) activeFilters.push(`Coleção: ${prodFilters.collection}`);
+    if(prodFilters.workshop) activeFilters.push(`Oficina: ${prodFilters.workshop}`);
+    if(searchTerm) activeFilters.push(`Busca: "${searchTerm}"`);
+    
+    doc.setFont("helvetica", "italic");
+    doc.text(activeFilters.length > 0 ? filterText + activeFilters.join(', ') : "Filtros: Geral", 14, 34);
+    
+    let yPos = 45;
 
     Object.keys(grouped).sort().forEach(workshop => {
-      // Verificar quebra de página
-      if (yPos > 270) {
-        doc.addPage();
-        yPos = 20;
-      }
+      if (yPos > 270) { doc.addPage(); yPos = 20; }
 
       // Cabeçalho da Oficina
       doc.setFontSize(12);
       doc.setFont("helvetica", "bold");
-      doc.setFillColor(240, 240, 240); // Fundo cinza leve
+      doc.setFillColor(240, 240, 240); 
       doc.rect(14, yPos - 5, 182, 8, 'F');
       doc.text(workshop, 16, yPos);
       yPos += 10;
@@ -405,10 +428,7 @@ export default function App() {
       doc.setFont("helvetica", "normal");
 
       grouped[workshop].forEach(batch => {
-        if (yPos > 280) {
-          doc.addPage();
-          yPos = 20;
-        }
+        if (yPos > 280) { doc.addPage(); yPos = 20; }
 
         const pending = batch.quantitySent - (batch.totalReceived || 0) - (batch.totalWaste || 0);
         const diffTime = Math.abs(now - batch.dateExpected);
@@ -418,11 +438,8 @@ export default function App() {
         const line2 = `Saída: ${batch.dateSent ? batch.dateSent.toLocaleDateString('pt-BR') : '-'} | Prev: ${batch.dateExpected ? batch.dateExpected.toLocaleDateString('pt-BR') : '-'} | Atraso: ${diffDays} dias`;
 
         doc.text(line, 16, yPos);
-        doc.text(line2, 120, yPos); // Alinha datas à direita na mesma linha se der, ou em baixo
-        // Ajuste simples para caber tudo
-        // Vamos fazer duas linhas para ficar limpo
-        // Linha 1: Ref e Qtd
-        // Linha 2: Datas e Atraso (em vermelho se possivel, mas vamos manter simples)
+        // Exibir Atraso destacado se possível (apenas texto aqui)
+        doc.text(`ATRASO: ${diffDays} dias`, 150, yPos, { align: 'left' });
         
         yPos += 5;
         doc.setFontSize(9);
@@ -432,13 +449,11 @@ export default function App() {
         doc.setFontSize(10);
         
         yPos += 8;
-        
-        // Linha divisória fina
         doc.setDrawColor(230);
         doc.line(16, yPos - 4, 190, yPos - 4);
       });
       
-      yPos += 5; // Espaço entre oficinas
+      yPos += 5; 
     });
 
     doc.save(`Relatorio_Atrasos_${now.toISOString().split('T')[0]}.pdf`);
@@ -638,19 +653,6 @@ export default function App() {
     return { sent, rcv, receivedBatchesCount: rcvBatches.size, avgPiecesPerBatch, pendP, pendB, waste, val, avgVal: pendP > 0 ? (val/pendP) : 0, lateBatches, latePieces, ranking: filteredRanking };
   }, [batches, dashFilters, dashPeriod, customRange, perfSearch, perfSort]);
 
-  const filteredProduction = useMemo(() => {
-    let r = batches.filter(b => (prodFilters.workshop ? b.workshop === prodFilters.workshop : true) && (prodFilters.collection ? b.collectionName === prodFilters.collection : true) && (prodFilters.dateSent ? formatDateForInput(b.dateSent) === prodFilters.dateSent : true) && (prodFilters.dateExpected ? formatDateForInput(b.dateExpected) === prodFilters.dateExpected : true) && (searchTerm ? (b.ref.includes(searchTerm.toUpperCase()) || b.workshop.includes(searchTerm.toUpperCase())) : true) && (showOnlyLate ? (b.dateExpected && new Date() > b.dateExpected && b.status !== 'Concluído') : true));
-    r.sort((a, b) => {
-      if (prodSort === 'created_desc') return b.createdAt - a.createdAt;
-      const dA_S = a.dateSent || new Date(0), dB_S = b.dateSent || new Date(0);
-      const dA_E = a.dateExpected || new Date(0), dB_E = b.dateExpected || new Date(0);
-      if (prodSort === 'sent_asc') return dA_S - dB_S; if (prodSort === 'sent_desc') return dB_S - dA_S;
-      if (prodSort === 'exp_asc') return dA_E - dB_E; if (prodSort === 'exp_desc') return dB_E - dA_E;
-      return 0;
-    });
-    return r;
-  }, [batches, prodFilters, searchTerm, prodSort, showOnlyLate]);
-
   if (authLoading) return <div className="flex items-center justify-center h-screen bg-slate-50 text-emerald-600">Carregando...</div>;
   if (!user) return <LoginScreen onLogin={handleLogin} loading={authLoading} error={loginError} />;
 
@@ -750,7 +752,7 @@ export default function App() {
               </Card>
               <Card className="p-4 border-l-4 border-l-emerald-500">
                 <div className="flex justify-between items-start">
-                  <div><p className="text-xs text-slate-500 font-bold uppercase">Recebidas (Boas)</p><h3 className="text-xl font-bold text-emerald-600 mt-1">{dashboardData.rcv}</h3><p className="text-[10px] text-emerald-600">Média: {Math.round(dashboardData.avgPiecesPerBatch)} / corte</p></div><CheckCircle className="w-6 h-6 text-emerald-100" />
+                  <div><p className="text-xs text-slate-500 font-bold uppercase">Recebidas (Boas)</p><h3 className="text-xl font-bold text-emerald-600 mt-1">{dashboardData.rcv}</h3><p className="text-[10px] text-emerald-600">Em {dashboardData.receivedBatchesCount} cortes • Méd: {Math.round(dashboardData.avgPiecesPerBatch)}/corte</p></div><CheckCircle className="w-6 h-6 text-emerald-100" />
                 </div>
               </Card>
             </div>
