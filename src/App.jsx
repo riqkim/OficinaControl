@@ -60,7 +60,7 @@ const db = getFirestore(app);
 const appId = 'oficina-control-prod'; 
 
 // --- CONFIGURAÇÃO DE ADMINISTRAÇÃO ---
-const ADMIN_EMAIL = 'henrique@chocris.com.br; 
+const ADMIN_EMAIL = 'henrique@chocris.com.br'; 
 
 // --- Componentes UI Auxiliares ---
 
@@ -77,8 +77,11 @@ const Badge = ({ status }) => {
     'Concluído': 'bg-emerald-100 text-emerald-800',
     'Atrasado': 'bg-red-100 text-red-800'
   };
+  // Normalização simples para evitar erros de acentuação
+  const normStatus = Object.keys(styles).find(k => k.toLowerCase() === (status || '').toLowerCase()) || status;
+  
   return (
-    <span className={`px-2 py-1 rounded-full text-xs font-semibold ${styles[status] || 'bg-slate-100 text-slate-600'}`}>
+    <span className={`px-2 py-1 rounded-full text-xs font-semibold ${styles[normStatus] || 'bg-slate-100 text-slate-600'}`}>
       {status}
     </span>
   );
@@ -86,33 +89,24 @@ const Badge = ({ status }) => {
 
 // --- Helpers de Data Robustos ---
 
-// Parseia datas vindas de Input, Texto BR/US ou Serial do Excel
 const parseDate = (value) => {
-  if (!value) return new Date(); // Fallback para hoje
-
-  // Se já for objeto Date
+  if (!value) return new Date(); 
   if (value instanceof Date) return value;
-
-  // Se for número (Serial do Excel)
-  // O Excel conta dias a partir de 30/12/1899
+  // Serial do Excel
   if (typeof value === 'number') {
     return new Date(Math.round((value - 25569) * 86400 * 1000));
   }
-
-  // Se for string
+  // String
   if (typeof value === 'string') {
-    // Formato YYYY-MM-DD
     if (value.includes('-')) {
       const parts = value.split('-');
       if (parts.length === 3) return new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0);
     }
-    // Formato DD/MM/YYYY (Comum no Excel BR)
     if (value.includes('/')) {
       const parts = value.split('/');
       if (parts.length === 3) return new Date(parts[2], parts[1] - 1, parts[0], 12, 0, 0);
     }
   }
-
   return new Date();
 };
 
@@ -127,7 +121,6 @@ const formatDateForInput = (dateObj) => {
 const isDateInRange = (date, start, end) => {
   if (!date) return false;
   const d = new Date(date); d.setHours(0,0,0,0);
-  
   if (start) {
     const s = new Date(start); s.setHours(0,0,0,0);
     if (d < s) return false;
@@ -168,51 +161,25 @@ const LoginScreen = ({ onLogin, loading, error }) => {
               <AlertCircle className="w-4 h-4" /> {error}
             </div>
           )}
-          
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
             <div className="relative">
               <User className="absolute left-3 top-3 w-5 h-5 text-slate-400" />
-              <input 
-                type="email" 
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full pl-10 p-3 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none transition"
-                placeholder="seu@email.com"
-                style={{ backgroundColor: '#ffffff' }}
-              />
+              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full pl-10 p-3 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none transition" placeholder="seu@email.com" style={{ backgroundColor: '#ffffff' }} />
             </div>
           </div>
-
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Senha</label>
             <div className="relative">
               <Lock className="absolute left-3 top-3 w-5 h-5 text-slate-400" />
-              <input 
-                type="password" 
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full pl-10 p-3 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none transition"
-                placeholder="••••••••"
-                style={{ backgroundColor: '#ffffff' }}
-              />
+              <input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} className="w-full pl-10 p-3 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none transition" placeholder="••••••••" style={{ backgroundColor: '#ffffff' }} />
             </div>
           </div>
-
-          <button 
-            type="submit" 
-            disabled={loading}
-            className="w-full bg-emerald-600 text-white py-3 rounded-lg font-bold hover:bg-emerald-700 transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-200"
-          >
-            {loading ? 'Entrando...' : 'Acessar Sistema'}
-            {!loading && <ArrowRight className="w-4 h-4" />}
+          <button type="submit" disabled={loading} className="w-full bg-emerald-600 text-white py-3 rounded-lg font-bold hover:bg-emerald-700 transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-200">
+            {loading ? 'Entrando...' : 'Acessar Sistema'} {!loading && <ArrowRight className="w-4 h-4" />}
           </button>
         </form>
-        <div className="bg-slate-50 p-4 text-center text-xs text-slate-400 border-t border-slate-100">
-          OficinaControl v2.0
-        </div>
+        <div className="bg-slate-50 p-4 text-center text-xs text-slate-400 border-t border-slate-100">OficinaControl v2.0</div>
       </div>
     </div>
   );
@@ -235,7 +202,6 @@ export default function App() {
   const [isReceiveModalOpen, setIsReceiveModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isEditReturnModalOpen, setIsEditReturnModalOpen] = useState(false);
-  
   const [selectedBatch, setSelectedBatch] = useState(null);
   const [selectedReturnIndex, setSelectedReturnIndex] = useState(null);
 
@@ -243,10 +209,8 @@ export default function App() {
   const [dashFilters, setDashFilters] = useState({ collection: '', fabric: '', workshop: '' });
   const [dashPeriod, setDashPeriod] = useState('all'); 
   const [customRange, setCustomRange] = useState({ start: '', end: '' });
-  
   const [perfSearch, setPerfSearch] = useState('');
   const [perfSort, setPerfSort] = useState('volume_desc');
-
   const [prodFilters, setProdFilters] = useState({ collection: '', workshop: '', dateSent: '', dateExpected: '' });
   const [prodSort, setProdSort] = useState('created_desc');
   const [showOnlyLate, setShowOnlyLate] = useState(false);
@@ -269,7 +233,6 @@ export default function App() {
       }
     };
     initAuth();
-
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setAuthLoading(false);
@@ -285,7 +248,6 @@ export default function App() {
     if (!user) return;
     setDataLoading(true);
     const q = collection(db, 'artifacts', appId, 'users', user.uid, 'production_batches');
-    
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -296,32 +258,19 @@ export default function App() {
       }));
       setBatches(data);
       setDataLoading(false);
-    }, (error) => {
-      console.error("Erro:", error);
-      setDataLoading(false);
-    });
+    }, (error) => { console.error("Erro:", error); setDataLoading(false); });
     return () => unsubscribe();
   }, [user]);
 
   // --- Auth Actions ---
   const handleLogin = async (email, password) => {
-    setLoginError('');
-    setAuthLoading(true);
-    try {
-      await signInWithEmailAndPassword(auth, email, password);
-    } catch (error) {
-      console.error(error);
-      setLoginError("Falha no login. Verifique suas credenciais.");
-      setAuthLoading(false);
-    }
+    setLoginError(''); setAuthLoading(true);
+    try { await signInWithEmailAndPassword(auth, email, password); } 
+    catch (error) { setLoginError("Falha no login. Verifique suas credenciais."); setAuthLoading(false); }
   };
+  const handleLogout = async () => { await signOut(auth); setActiveTab('production'); };
 
-  const handleLogout = async () => {
-    await signOut(auth);
-    setActiveTab('production');
-  };
-
-  // --- Excel ---
+  // --- Excel Export ---
   const handleExportExcel = () => {
     if (!window.XLSX) { alert("Carregando biblioteca... Aguarde."); return; }
     const dataToExport = batches.map(b => {
@@ -345,7 +294,7 @@ export default function App() {
 
   const handleImportClick = () => fileInputRef.current.click();
   
-  // --- IMPORTAÇÃO CORRIGIDA ---
+  // --- IMPORTAÇÃO ROBUSTA ---
   const handleFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file || !window.XLSX) return;
@@ -363,26 +312,29 @@ export default function App() {
         
         for (const row of data) {
           try {
+            // Normalização Agressiva das chaves (remove _, espaços e lowercase)
             const normalizedRow = {};
             Object.keys(row).forEach(key => {
-              normalizedRow[key.trim().toLowerCase()] = row[key];
+              const cleanKey = key.toString().trim().toLowerCase().replace(/[_\s]/g, '');
+              normalizedRow[cleanKey] = row[key];
             });
 
+            // Validação mínima
             if (!normalizedRow['colecao'] || !normalizedRow['oficina'] || !normalizedRow['ref']) {
-              console.warn("Linha pulada por falta de dados:", row);
+              console.warn("Linha pulada - dados incompletos:", row);
               continue;
             }
 
-            const dateSent = parseDate(normalizedRow['data_saida'] || row['Data_Saida']);
-            const dateExpected = parseDate(normalizedRow['previsao_entrada'] || row['Previsao_Entrada']);
+            const dateSent = parseDate(normalizedRow['datasaida']);
+            const dateExpected = parseDate(normalizedRow['previsaoentrada']);
             
-            // --- NOVOS CAMPOS PARA IMPORTAÇÃO ---
-            const totalReceived = parseInt(normalizedRow['total_recebido'] || row['Total_Recebido'] || 0);
-            const totalWaste = parseInt(normalizedRow['total_perda'] || row['Total_Perda'] || 0);
-            const statusImported = normalizedRow['status'] || row['Status'];
-            const lastDeliveryDateRaw = normalizedRow['data_ultima_entrega'] || row['Data_Ultima_Entrega'];
+            // Leitura segura dos recebidos
+            const totalReceived = parseInt(normalizedRow['totalrecebido'] || 0, 10);
+            const totalWaste = parseInt(normalizedRow['totalperda'] || 0, 10);
+            const statusImported = normalizedRow['status'];
+            const lastDeliveryDateRaw = normalizedRow['dataultimaentrega'];
             
-            // Se tiver entrega registrada no Excel, cria o histórico para os gráficos funcionarem
+            // Gerar histórico se houver recebimento
             const returns = [];
             if (totalReceived > 0 || totalWaste > 0) {
               const deliveryDate = lastDeliveryDateRaw ? parseDate(lastDeliveryDateRaw) : new Date();
@@ -395,14 +347,13 @@ export default function App() {
               });
             }
 
-            // Calcula status ou usa o da planilha
+            const qtdEnviada = parseInt(normalizedRow['qtdenviada'] || 0, 10);
             let finalStatus = 'Pendente';
-            const qtdEnviada = parseInt(normalizedRow['qtd_enviada'] || 0);
             
             if (statusImported) {
-               finalStatus = statusImported; // Respeita o status da planilha (ex: Concluído)
+               // Mapeia para status válidos ou mantem o da planilha
+               finalStatus = statusImported;
             } else {
-               // Cálculo automático se não tiver status
                const missing = qtdEnviada - totalReceived - totalWaste;
                if (missing <= 0) finalStatus = 'Concluído';
                else if (totalReceived > 0) finalStatus = 'Parcial';
@@ -412,17 +363,16 @@ export default function App() {
               collectionName: String(normalizedRow['colecao']).toUpperCase(),
               workshop: String(normalizedRow['oficina']).toUpperCase(),
               ref: String(normalizedRow['ref']).toUpperCase(),
-              price: parseFloat(normalizedRow['preco_unit'] || 0).toFixed(2),
+              price: parseFloat(normalizedRow['precounit'] || 0).toFixed(2),
               fabricType: String(normalizedRow['tecido'] || 'OUTRO').toUpperCase(),
               quantitySent: qtdEnviada,
               dateSent: Timestamp.fromDate(dateSent),
               dateExpected: Timestamp.fromDate(dateExpected),
               
-              // Dados Importados
               status: finalStatus,
               totalReceived: totalReceived,
               totalWaste: totalWaste,
-              returns: returns, // Histórico gerado
+              returns: returns,
               
               createdAt: Timestamp.now()
             };
