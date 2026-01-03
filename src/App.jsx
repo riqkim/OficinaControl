@@ -60,7 +60,7 @@ const db = getFirestore(app);
 const appId = 'oficina-control-prod'; 
 
 // --- CONFIGURAÇÃO DE ADMINISTRAÇÃO ---
-const ADMIN_EMAIL = 'henrique@chocris.com.br'; 
+const ADMIN_EMAIL = 'henrique@chocris.com.br; 
 
 // --- Componentes UI Auxiliares ---
 
@@ -355,7 +355,6 @@ export default function App() {
       const bstr = evt.target.result;
       const wb = window.XLSX.read(bstr, { type: 'binary' });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      // Pega os dados como array de objetos
       const data = window.XLSX.utils.sheet_to_json(ws);
 
       if (confirm(`Encontrados ${data.length} registros. Deseja importar?`)) {
@@ -364,22 +363,50 @@ export default function App() {
         
         for (const row of data) {
           try {
-            // Tenta pegar colunas mesmo se tiverem espaços extras ou maiusculas/minusculas
-            // Normaliza as chaves para facilitar
             const normalizedRow = {};
             Object.keys(row).forEach(key => {
               normalizedRow[key.trim().toLowerCase()] = row[key];
             });
 
-            // Validação mínima: Precisa de Coleção, Oficina e Ref
             if (!normalizedRow['colecao'] || !normalizedRow['oficina'] || !normalizedRow['ref']) {
               console.warn("Linha pulada por falta de dados:", row);
               continue;
             }
 
-            // Tratamento de Datas Inteligente
             const dateSent = parseDate(normalizedRow['data_saida'] || row['Data_Saida']);
             const dateExpected = parseDate(normalizedRow['previsao_entrada'] || row['Previsao_Entrada']);
+            
+            // --- NOVOS CAMPOS PARA IMPORTAÇÃO ---
+            const totalReceived = parseInt(normalizedRow['total_recebido'] || row['Total_Recebido'] || 0);
+            const totalWaste = parseInt(normalizedRow['total_perda'] || row['Total_Perda'] || 0);
+            const statusImported = normalizedRow['status'] || row['Status'];
+            const lastDeliveryDateRaw = normalizedRow['data_ultima_entrega'] || row['Data_Ultima_Entrega'];
+            
+            // Se tiver entrega registrada no Excel, cria o histórico para os gráficos funcionarem
+            const returns = [];
+            if (totalReceived > 0 || totalWaste > 0) {
+              const deliveryDate = lastDeliveryDateRaw ? parseDate(lastDeliveryDateRaw) : new Date();
+              returns.push({
+                id: `import-${Date.now()}-${Math.random()}`,
+                quantity: totalReceived,
+                waste: totalWaste,
+                date: Timestamp.fromDate(deliveryDate),
+                notes: 'IMPORTADO VIA EXCEL'
+              });
+            }
+
+            // Calcula status ou usa o da planilha
+            let finalStatus = 'Pendente';
+            const qtdEnviada = parseInt(normalizedRow['qtd_enviada'] || 0);
+            
+            if (statusImported) {
+               finalStatus = statusImported; // Respeita o status da planilha (ex: Concluído)
+            } else {
+               // Cálculo automático se não tiver status
+               const missing = qtdEnviada - totalReceived - totalWaste;
+               if (missing <= 0) finalStatus = 'Concluído';
+               else if (totalReceived > 0) finalStatus = 'Parcial';
+            }
 
             const newBatch = {
               collectionName: String(normalizedRow['colecao']).toUpperCase(),
@@ -387,13 +414,16 @@ export default function App() {
               ref: String(normalizedRow['ref']).toUpperCase(),
               price: parseFloat(normalizedRow['preco_unit'] || 0).toFixed(2),
               fabricType: String(normalizedRow['tecido'] || 'OUTRO').toUpperCase(),
-              quantitySent: parseInt(normalizedRow['qtd_enviada'] || 0),
+              quantitySent: qtdEnviada,
               dateSent: Timestamp.fromDate(dateSent),
               dateExpected: Timestamp.fromDate(dateExpected),
-              status: 'Pendente',
-              totalReceived: 0,
-              totalWaste: 0,
-              returns: [],
+              
+              // Dados Importados
+              status: finalStatus,
+              totalReceived: totalReceived,
+              totalWaste: totalWaste,
+              returns: returns, // Histórico gerado
+              
               createdAt: Timestamp.now()
             };
 
@@ -405,7 +435,6 @@ export default function App() {
           }
         }
         alert(`${count} cortes importados com sucesso! ${errors > 0 ? `(${errors} erros)` : ''}`);
-        // Limpar o input para permitir selecionar o mesmo arquivo novamente se precisar
         if (fileInputRef.current) fileInputRef.current.value = '';
         setActiveTab('production');
       }
