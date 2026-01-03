@@ -84,16 +84,40 @@ const Badge = ({ status }) => {
   );
 };
 
-// --- Helpers de Data ---
+// --- Helpers de Data Robustos ---
 
-const createSafeDate = (dateString) => {
-  if (!dateString) return null;
-  const [year, month, day] = dateString.split('-').map(Number);
-  return new Date(year, month - 1, day, 12, 0, 0); 
+// Parseia datas vindas de Input, Texto BR/US ou Serial do Excel
+const parseDate = (value) => {
+  if (!value) return new Date(); // Fallback para hoje
+
+  // Se já for objeto Date
+  if (value instanceof Date) return value;
+
+  // Se for número (Serial do Excel)
+  // O Excel conta dias a partir de 30/12/1899
+  if (typeof value === 'number') {
+    return new Date(Math.round((value - 25569) * 86400 * 1000));
+  }
+
+  // Se for string
+  if (typeof value === 'string') {
+    // Formato YYYY-MM-DD
+    if (value.includes('-')) {
+      const parts = value.split('-');
+      if (parts.length === 3) return new Date(parts[0], parts[1] - 1, parts[2], 12, 0, 0);
+    }
+    // Formato DD/MM/YYYY (Comum no Excel BR)
+    if (value.includes('/')) {
+      const parts = value.split('/');
+      if (parts.length === 3) return new Date(parts[2], parts[1] - 1, parts[0], 12, 0, 0);
+    }
+  }
+
+  return new Date();
 };
 
 const formatDateForInput = (dateObj) => {
-  if (!dateObj) return '';
+  if (!dateObj || isNaN(dateObj.getTime())) return '';
   const year = dateObj.getFullYear();
   const month = String(dateObj.getMonth() + 1).padStart(2, '0');
   const day = String(dateObj.getDate()).padStart(2, '0');
@@ -320,35 +344,73 @@ export default function App() {
   };
 
   const handleImportClick = () => fileInputRef.current.click();
+  
+  // --- IMPORTAÇÃO CORRIGIDA ---
   const handleFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file || !window.XLSX) return;
+    
     const reader = new FileReader();
     reader.onload = async (evt) => {
       const bstr = evt.target.result;
       const wb = window.XLSX.read(bstr, { type: 'binary' });
       const ws = wb.Sheets[wb.SheetNames[0]];
+      // Pega os dados como array de objetos
       const data = window.XLSX.utils.sheet_to_json(ws);
-      if (confirm(`Importar ${data.length} registros?`)) {
+
+      if (confirm(`Encontrados ${data.length} registros. Deseja importar?`)) {
         let count = 0;
+        let errors = 0;
+        
         for (const row of data) {
           try {
-            if (!row.Colecao || !row.Oficina || !row.Ref) continue;
+            // Tenta pegar colunas mesmo se tiverem espaços extras ou maiusculas/minusculas
+            // Normaliza as chaves para facilitar
+            const normalizedRow = {};
+            Object.keys(row).forEach(key => {
+              normalizedRow[key.trim().toLowerCase()] = row[key];
+            });
+
+            // Validação mínima: Precisa de Coleção, Oficina e Ref
+            if (!normalizedRow['colecao'] || !normalizedRow['oficina'] || !normalizedRow['ref']) {
+              console.warn("Linha pulada por falta de dados:", row);
+              continue;
+            }
+
+            // Tratamento de Datas Inteligente
+            const dateSent = parseDate(normalizedRow['data_saida'] || row['Data_Saida']);
+            const dateExpected = parseDate(normalizedRow['previsao_entrada'] || row['Previsao_Entrada']);
+
             const newBatch = {
-              collectionName: String(row.Colecao).toUpperCase(), workshop: String(row.Oficina).toUpperCase(), ref: String(row.Ref).toUpperCase(),
-              price: parseFloat(row.Preco_Unit || 0).toFixed(2), fabricType: String(row.Tecido || 'OUTRO').toUpperCase(),
-              quantitySent: parseInt(row.Qtd_Enviada || 0), dateSent: Timestamp.fromDate(createSafeDate(row.Data_Saida) || new Date()),
-              dateExpected: Timestamp.fromDate(createSafeDate(row.Previsao_Entrada) || new Date()), status: 'Pendente', totalReceived: 0, totalWaste: 0, returns: [], createdAt: Timestamp.now()
+              collectionName: String(normalizedRow['colecao']).toUpperCase(),
+              workshop: String(normalizedRow['oficina']).toUpperCase(),
+              ref: String(normalizedRow['ref']).toUpperCase(),
+              price: parseFloat(normalizedRow['preco_unit'] || 0).toFixed(2),
+              fabricType: String(normalizedRow['tecido'] || 'OUTRO').toUpperCase(),
+              quantitySent: parseInt(normalizedRow['qtd_enviada'] || 0),
+              dateSent: Timestamp.fromDate(dateSent),
+              dateExpected: Timestamp.fromDate(dateExpected),
+              status: 'Pendente',
+              totalReceived: 0,
+              totalWaste: 0,
+              returns: [],
+              createdAt: Timestamp.now()
             };
+
             await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'production_batches'), newBatch);
             count++;
-          } catch (err) { console.error(err); }
+          } catch (err) { 
+            console.error("Erro ao importar linha:", row, err);
+            errors++;
+          }
         }
-        alert(`${count} importados!`);
+        alert(`${count} cortes importados com sucesso! ${errors > 0 ? `(${errors} erros)` : ''}`);
+        // Limpar o input para permitir selecionar o mesmo arquivo novamente se precisar
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        setActiveTab('production');
       }
     };
     reader.readAsBinaryString(file);
-    e.target.value = '';
   };
 
   // --- Logic ---
@@ -361,10 +423,10 @@ export default function App() {
     return { returns: updatedReturns, totalReceived, totalWaste, status };
   };
 
-  const handleAddBatch = async (e) => { e.preventDefault(); const f = new FormData(e.target); const b = { collectionName: f.get('collectionName').toUpperCase(), workshop: f.get('workshop').toUpperCase(), ref: f.get('ref').toUpperCase(), price: parseFloat(f.get('price')).toFixed(2), fabricType: f.get('fabricType').toUpperCase(), quantitySent: parseInt(f.get('quantitySent')), dateSent: Timestamp.fromDate(createSafeDate(f.get('dateSent'))), dateExpected: Timestamp.fromDate(createSafeDate(f.get('dateExpected'))), status: 'Pendente', totalReceived: 0, totalWaste: 0, returns: [], createdAt: Timestamp.now() }; try { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'production_batches'), b); e.target.reset(); alert('Salvo!'); setActiveTab('production'); } catch { alert('Erro.'); } };
-  const handleUpdateBatch = async (e) => { e.preventDefault(); if (!selectedBatch) return; const f = new FormData(e.target); const b = { collectionName: f.get('collectionName').toUpperCase(), workshop: f.get('workshop').toUpperCase(), ref: f.get('ref').toUpperCase(), price: parseFloat(f.get('price')).toFixed(2), fabricType: f.get('fabricType').toUpperCase(), quantitySent: parseInt(f.get('quantitySent')), dateSent: Timestamp.fromDate(createSafeDate(f.get('dateSent'))), dateExpected: Timestamp.fromDate(createSafeDate(f.get('dateExpected'))) }; const s = recalculateBatchStatus({ ...selectedBatch, quantitySent: b.quantitySent }, selectedBatch.returns); try { await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'production_batches', selectedBatch.id), { ...b, ...s }); setIsEditModalOpen(false); setSelectedBatch(null); } catch { alert('Erro.'); } };
-  const handleAddReturn = async (e) => { e.preventDefault(); if (!selectedBatch) return; const f = new FormData(e.target); const r = { id: Date.now().toString(), quantity: parseInt(f.get('qtyReceived')) || 0, waste: parseInt(f.get('waste')) || 0, date: Timestamp.fromDate(createSafeDate(f.get('returnDate'))), notes: f.get('notes').toUpperCase() }; const u = recalculateBatchStatus(selectedBatch, [...selectedBatch.returns, r]); try { await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'production_batches', selectedBatch.id), u); setIsReceiveModalOpen(false); setSelectedBatch(null); } catch { alert('Erro.'); } };
-  const handleUpdateReturn = async (e) => { e.preventDefault(); if (!selectedBatch || selectedReturnIndex === null) return; const f = new FormData(e.target); const uR = { ...selectedBatch.returns[selectedReturnIndex], quantity: parseInt(f.get('qtyReceived')) || 0, waste: parseInt(f.get('waste')) || 0, date: Timestamp.fromDate(createSafeDate(f.get('returnDate'))), notes: f.get('notes').toUpperCase() }; const newR = [...selectedBatch.returns]; newR[selectedReturnIndex] = uR; const u = recalculateBatchStatus(selectedBatch, newR); try { await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'production_batches', selectedBatch.id), u); setIsEditReturnModalOpen(false); setSelectedBatch(null); setSelectedReturnIndex(null); } catch { alert('Erro.'); } };
+  const handleAddBatch = async (e) => { e.preventDefault(); const f = new FormData(e.target); const b = { collectionName: f.get('collectionName').toUpperCase(), workshop: f.get('workshop').toUpperCase(), ref: f.get('ref').toUpperCase(), price: parseFloat(f.get('price')).toFixed(2), fabricType: f.get('fabricType').toUpperCase(), quantitySent: parseInt(f.get('quantitySent')), dateSent: Timestamp.fromDate(parseDate(f.get('dateSent'))), dateExpected: Timestamp.fromDate(parseDate(f.get('dateExpected'))), status: 'Pendente', totalReceived: 0, totalWaste: 0, returns: [], createdAt: Timestamp.now() }; try { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'production_batches'), b); e.target.reset(); alert('Salvo!'); setActiveTab('production'); } catch { alert('Erro.'); } };
+  const handleUpdateBatch = async (e) => { e.preventDefault(); if (!selectedBatch) return; const f = new FormData(e.target); const b = { collectionName: f.get('collectionName').toUpperCase(), workshop: f.get('workshop').toUpperCase(), ref: f.get('ref').toUpperCase(), price: parseFloat(f.get('price')).toFixed(2), fabricType: f.get('fabricType').toUpperCase(), quantitySent: parseInt(f.get('quantitySent')), dateSent: Timestamp.fromDate(parseDate(f.get('dateSent'))), dateExpected: Timestamp.fromDate(parseDate(f.get('dateExpected'))) }; const s = recalculateBatchStatus({ ...selectedBatch, quantitySent: b.quantitySent }, selectedBatch.returns); try { await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'production_batches', selectedBatch.id), { ...b, ...s }); setIsEditModalOpen(false); setSelectedBatch(null); } catch { alert('Erro.'); } };
+  const handleAddReturn = async (e) => { e.preventDefault(); if (!selectedBatch) return; const f = new FormData(e.target); const r = { id: Date.now().toString(), quantity: parseInt(f.get('qtyReceived')) || 0, waste: parseInt(f.get('waste')) || 0, date: Timestamp.fromDate(parseDate(f.get('returnDate'))), notes: f.get('notes').toUpperCase() }; const u = recalculateBatchStatus(selectedBatch, [...selectedBatch.returns, r]); try { await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'production_batches', selectedBatch.id), u); setIsReceiveModalOpen(false); setSelectedBatch(null); } catch { alert('Erro.'); } };
+  const handleUpdateReturn = async (e) => { e.preventDefault(); if (!selectedBatch || selectedReturnIndex === null) return; const f = new FormData(e.target); const uR = { ...selectedBatch.returns[selectedReturnIndex], quantity: parseInt(f.get('qtyReceived')) || 0, waste: parseInt(f.get('waste')) || 0, date: Timestamp.fromDate(parseDate(f.get('returnDate'))), notes: f.get('notes').toUpperCase() }; const newR = [...selectedBatch.returns]; newR[selectedReturnIndex] = uR; const u = recalculateBatchStatus(selectedBatch, newR); try { await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'production_batches', selectedBatch.id), u); setIsEditReturnModalOpen(false); setSelectedBatch(null); setSelectedReturnIndex(null); } catch { alert('Erro.'); } };
   const handleDeleteReturn = async (b, i) => { if (!confirm('Excluir entrega?')) return; const newR = b.returns.filter((_, idx) => idx !== i); const u = recalculateBatchStatus(b, newR); try { await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'production_batches', b.id), u); } catch { alert('Erro.'); } };
   const handleDelete = async (id) => { if (confirm('Excluir registro?')) await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'production_batches', id)); };
   const handleUpperCaseInput = (e) => e.target.value = e.target.value.toUpperCase();
@@ -568,7 +630,7 @@ export default function App() {
                   <div><label className="block text-sm font-medium text-slate-700 mb-1">Referência (Ref)</label><input name="ref" onInput={handleUpperCaseInput} required placeholder="EX: 12345" className="w-full p-2 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none uppercase" style={{ backgroundColor: '#ffffff' }} /></div>
                   <div><label className="block text-sm font-medium text-slate-700 mb-1">Preço (R$)</label><div className="relative"><span className="absolute left-3 top-2 text-slate-500">R$</span><input name="price" type="number" step="0.01" required placeholder="3.50" className="w-full p-2 pl-9 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none" style={{ backgroundColor: '#ffffff' }} onBlur={(e) => { const val = parseFloat(e.target.value); if (!isNaN(val)) e.target.value = val.toFixed(2); }} /></div></div>
                   <div><label className="block text-sm font-medium text-slate-700 mb-1">Tipo de Tecido</label><select name="fabricType" className="w-full p-2 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none" style={{ backgroundColor: '#ffffff' }}><option value="M">MALHA (M)</option><option value="P">PLANO (P)</option><option value="Outro">OUTRO</option></select></div>
-                  <div><label className="block text-sm font-medium text-slate-700 mb-1">Quantidade Enviada</label><input name="quantitySent" type="number" required placeholder="EX: 560" className="w-full p-2 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none" style={{ backgroundColor: '#ffffff' }} /></div>
+                  <div><label className="block text-sm font-medium text-slate-700 mb-1">Quantidade Enviada</label><input name="quantitySent" type="number" required placeholder="560" className="w-full p-2 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none" style={{ backgroundColor: '#ffffff' }} /></div>
                   <div><label className="block text-sm font-medium text-slate-700 mb-1">Data Saída</label><input name="dateSent" type="date" required defaultValue={formatDateForInput(new Date())} className="w-full p-2 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none" style={{ backgroundColor: '#ffffff' }} /></div>
                   <div><label className="block text-sm font-medium text-slate-700 mb-1">Previsão Entrega</label><input name="dateExpected" type="date" required className="w-full p-2 border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none" style={{ backgroundColor: '#ffffff' }} /></div>
                 </div>
