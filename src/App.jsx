@@ -215,7 +215,7 @@ export default function App() {
   // --- Logic & Data ---
   const recalculateBatchStatus = (batch, updatedReturns) => { const totalReceived = updatedReturns.reduce((acc, curr) => acc + (curr.quantity || 0), 0); const totalWaste = updatedReturns.reduce((acc, curr) => acc + (curr.waste || 0), 0); const missing = batch.quantitySent - totalReceived - totalWaste; let status = 'Parcial'; if (missing <= 0) status = 'Concluído'; else if (totalReceived === 0) status = 'Pendente'; return { returns: updatedReturns, totalReceived, totalWaste, status }; };
   
-  // Handlers CRUD (Add/Update/Delete) ... (Omitted for brevity, kept same logic)
+  // Handlers CRUD
   const handleAddBatch = async (e) => { e.preventDefault(); const f = new FormData(e.target); const b = { collectionName: f.get('collectionName').toUpperCase(), workshop: f.get('workshop').toUpperCase(), ref: f.get('ref').toUpperCase(), price: parseFloat(f.get('price')).toFixed(2), fabricType: f.get('fabricType').toUpperCase(), quantitySent: parseInt(f.get('quantitySent')), dateSent: Timestamp.fromDate(parseDate(f.get('dateSent'))), dateExpected: Timestamp.fromDate(parseDate(f.get('dateExpected'))), status: 'Pendente', totalReceived: 0, totalWaste: 0, returns: [], createdAt: Timestamp.now() }; try { await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'production_batches'), b); e.target.reset(); alert('Salvo!'); setActiveTab('production'); } catch { alert('Erro.'); } };
   const handleUpdateBatch = async (e) => { e.preventDefault(); if (!selectedBatch) return; const f = new FormData(e.target); const b = { collectionName: f.get('collectionName').toUpperCase(), workshop: f.get('workshop').toUpperCase(), ref: f.get('ref').toUpperCase(), price: parseFloat(f.get('price')).toFixed(2), fabricType: f.get('fabricType').toUpperCase(), quantitySent: parseInt(f.get('quantitySent')), dateSent: Timestamp.fromDate(parseDate(f.get('dateSent'))), dateExpected: Timestamp.fromDate(parseDate(f.get('dateExpected'))) }; const s = recalculateBatchStatus({ ...selectedBatch, quantitySent: b.quantitySent }, selectedBatch.returns); try { await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'production_batches', selectedBatch.id), { ...b, ...s }); setIsEditModalOpen(false); setSelectedBatch(null); } catch { alert('Erro.'); } };
   const handleAddReturn = async (e) => { e.preventDefault(); if (!selectedBatch) return; const f = new FormData(e.target); const r = { id: Date.now().toString(), quantity: parseInt(f.get('qtyReceived')) || 0, waste: parseInt(f.get('waste')) || 0, date: Timestamp.fromDate(parseDate(f.get('returnDate'))), notes: f.get('notes').toUpperCase() }; const u = recalculateBatchStatus(selectedBatch, [...selectedBatch.returns, r]); try { await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'production_batches', selectedBatch.id), u); setIsReceiveModalOpen(false); setSelectedBatch(null); } catch { alert('Erro.'); } };
@@ -228,7 +228,7 @@ export default function App() {
   const handleLogout = async () => { await signOut(auth); setActiveTab('production'); };
   const handleUpperCaseInput = (e) => e.target.value = e.target.value.toUpperCase();
   const handleImportClick = () => fileInputRef.current.click();
-  const handleFileChange = async (e) => { /* ...Import logic same as previous... */ const file = e.target.files[0]; if (!file || !window.XLSX) return; const reader = new FileReader(); reader.onload = async (evt) => { const bstr = evt.target.result; const wb = window.XLSX.read(bstr, { type: 'binary' }); const ws = wb.Sheets[wb.SheetNames[0]]; const data = window.XLSX.utils.sheet_to_json(ws); if (confirm(`Importar ${data.length} registros?`)) { let c = 0; for (const row of data) { try { const nr = {}; Object.keys(row).forEach(k => nr[k.toString().trim().toLowerCase().replace(/[_\s]/g, '')] = row[k]); if (!nr['colecao'] || !nr['oficina'] || !nr['ref']) continue; const dS = parseDate(nr['datasaida']); const dE = parseDate(nr['previsaoentrada']); const tR = parseInt(nr['totalrecebido']||0, 10); const tW = parseInt(nr['totalperda']||0, 10); const sI = nr['status']; const lDR = nr['dataultimaentrega']; const ret = []; if(tR>0||tW>0){ const dD = lDR ? parseDate(lDR) : new Date(); ret.push({ id: `imp-${Date.now()}-${Math.random()}`, quantity: tR, waste: tW, date: Timestamp.fromDate(dD), notes: 'IMPORT' }); } const qE = parseInt(nr['qtdenviada']||0, 10); let fS = 'Pendente'; if (sI) fS = sI; else { const m = qE - tR - tW; if(m<=0) fS='Concluído'; else if(tR>0) fS='Parcial'; } const nB = { collectionName: String(nr['colecao']).toUpperCase(), workshop: String(nr['oficina']).toUpperCase(), ref: String(nr['ref']).toUpperCase(), price: parseFloat(nr['precounit']||0).toFixed(2), fabricType: String(nr['tecido']||'OUTRO').toUpperCase(), quantitySent: qE, dateSent: Timestamp.fromDate(dS), dateExpected: Timestamp.fromDate(dE), status: fS, totalReceived: tR, totalWaste: tW, returns: ret, createdAt: Timestamp.now() }; await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'production_batches'), nB); c++; } catch (err) { console.error(err); } } alert(`${c} importados!`); if(fileInputRef.current) fileInputRef.current.value=''; setActiveTab('production'); } }; reader.readAsBinaryString(file); };
+  const handleFileChange = async (e) => { const file = e.target.files[0]; if (!file || !window.XLSX) return; const reader = new FileReader(); reader.onload = async (evt) => { const bstr = evt.target.result; const wb = window.XLSX.read(bstr, { type: 'binary' }); const ws = wb.Sheets[wb.SheetNames[0]]; const data = window.XLSX.utils.sheet_to_json(ws); if (confirm(`Importar ${data.length} registros?`)) { let c = 0; for (const row of data) { try { const nr = {}; Object.keys(row).forEach(k => nr[k.toString().trim().toLowerCase().replace(/[_\s]/g, '')] = row[k]); if (!nr['colecao'] || !nr['oficina'] || !nr['ref']) continue; const dS = parseDate(nr['datasaida']); const dE = parseDate(nr['previsaoentrada']); const tR = parseInt(nr['totalrecebido']||0, 10); const tW = parseInt(nr['totalperda']||0, 10); const sI = nr['status']; const lDR = nr['dataultimaentrega']; const ret = []; if(tR>0||tW>0){ const dD = lDR ? parseDate(lDR) : new Date(); ret.push({ id: `imp-${Date.now()}-${Math.random()}`, quantity: tR, waste: tW, date: Timestamp.fromDate(dD), notes: 'IMPORT' }); } const qE = parseInt(nr['qtdenviada']||0, 10); let fS = 'Pendente'; if (sI) fS = sI; else { const m = qE - tR - tW; if(m<=0) fS='Concluído'; else if(tR>0) fS='Parcial'; } const nB = { collectionName: String(nr['colecao']).toUpperCase(), workshop: String(nr['oficina']).toUpperCase(), ref: String(nr['ref']).toUpperCase(), price: parseFloat(nr['precounit']||0).toFixed(2), fabricType: String(nr['tecido']||'OUTRO').toUpperCase(), quantitySent: qE, dateSent: Timestamp.fromDate(dS), dateExpected: Timestamp.fromDate(dE), status: fS, totalReceived: tR, totalWaste: tW, returns: ret, createdAt: Timestamp.now() }; await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'production_batches'), nB); c++; } catch (err) { console.error(err); } } alert(`${c} importados!`); if(fileInputRef.current) fileInputRef.current.value=''; setActiveTab('production'); } }; reader.readAsBinaryString(file); };
   const handleExportExcel = () => { if (!window.XLSX) { alert("Aguarde biblioteca..."); return; } const data = batches.map(b => { let lD = ''; if(b.returns?.length>0) { const sR = [...b.returns].sort((a,b)=>b.date-a.date); if(sR[0]?.date) lD = formatDateForInput(sR[0].date); } return { Colecao: b.collectionName, Oficina: b.workshop, Ref: b.ref, Preco_Unit: b.price, Tecido: b.fabricType, Qtd_Enviada: b.quantitySent, Data_Saida: b.dateSent ? formatDateForInput(b.dateSent) : '', Previsao_Entrada: b.dateExpected ? formatDateForInput(b.dateExpected) : '', Data_Ultima_Entrega: lD, Status: b.status, Total_Recebido: b.totalReceived, Total_Perda: b.totalWaste, Falta: b.quantitySent - b.totalReceived - b.totalWaste }; }); const ws = window.XLSX.utils.json_to_sheet(data); const wb = window.XLSX.utils.book_new(); window.XLSX.utils.book_append_sheet(wb, ws, "Cortes"); window.XLSX.writeFile(wb, `Cortes_${new Date().toISOString().split('T')[0]}.xlsx`); };
 
   const uniqueCollections = useMemo(() => [...new Set(batches.map(b => b.collectionName))].sort(), [batches]);
@@ -254,7 +254,17 @@ export default function App() {
     const lateBatches = filteredProduction.filter(b => { if (b.status === 'Concluído' || !b.dateExpected) return false; const dE = new Date(b.dateExpected); dE.setHours(23, 59, 59, 999); return dE < now; });
     if (lateBatches.length === 0) { alert("Nenhum atraso encontrado."); return; }
     const grouped = {}; lateBatches.forEach(b => { const w = b.workshop || 'SEM OFICINA'; if (!grouped[w]) grouped[w] = []; grouped[w].push(b); });
+    
+    // Header PDF
     doc.setFontSize(18); doc.text(`Relatório de Atrasos`, 14, 20); doc.setFontSize(10); doc.text(`Gerado em: ${now.toLocaleDateString('pt-BR')}`, 14, 28);
+    let filterText = "Filtros aplicados: ";
+    const activeFilters = [];
+    if(prodFilters.collection) activeFilters.push(`Coleção: ${prodFilters.collection}`);
+    if(prodFilters.workshop) activeFilters.push(`Oficina: ${prodFilters.workshop}`);
+    if(searchTerm) activeFilters.push(`Busca: "${searchTerm}"`);
+    doc.setFont("helvetica", "italic");
+    doc.text(activeFilters.length > 0 ? filterText + activeFilters.join(', ') : "Filtros: Geral", 14, 34);
+
     let y = 45; Object.keys(grouped).sort().forEach(w => { if(y>270){doc.addPage();y=20;} doc.setFontSize(12); doc.setFont("helvetica","bold"); doc.setFillColor(240,240,240); doc.rect(14,y-5,182,8,'F'); doc.text(w,16,y); y+=10; doc.setFontSize(10); doc.setFont("helvetica","normal"); grouped[w].forEach(b => { if(y>280){doc.addPage();y=20;} const p = b.quantitySent - (b.totalReceived||0) - (b.totalWaste||0); const d = Math.ceil(Math.abs(now-b.dateExpected)/86400000); doc.text(`Ref: ${b.ref} | Falta: ${p}`, 16, y); doc.text(`ATRASO: ${d} dias`, 150, y); y+=5; doc.setFontSize(9); doc.setTextColor(100); doc.text(`Saída: ${b.dateSent?b.dateSent.toLocaleDateString('pt-BR'):'-'} | Prev: ${b.dateExpected?b.dateExpected.toLocaleDateString('pt-BR'):'-'}`, 16, y); doc.setTextColor(0); doc.setFontSize(10); y+=8; doc.setDrawColor(230); doc.line(16, y-4, 190, y-4); }); y+=5; }); doc.save('Relatorio_Atrasos.pdf');
   };
 
@@ -273,14 +283,19 @@ export default function App() {
     const rcvBatches = new Set();
     const wStats = {};
     
-    // --- Lógica para Modelos Únicos ---
-    const refStats = {}; // { 'REF123': { count: 0, totalQty: 0, type: 'M' } }
+    // --- Lógica de Modelos Únicos e Repetições ---
+    const producedStats = { totalRefs: new Set(), malhaRefs: new Set(), planoRefs: new Set(), totalQty: 0, malhaQty: 0, planoQty: 0 };
+    const deliveredStats = { totalRefs: new Set(), malhaRefs: new Set(), planoRefs: new Set(), totalQty: 0, malhaQty: 0, planoQty: 0 };
+    const refRepeatStats = {};
 
     batches.forEach(b => {
       if (!matches(b)) return;
-      
+      const type = b.fabricType ? b.fabricType.toUpperCase() : '';
+      const isMalha = type === 'M' || type.startsWith('MALHA');
+      const isPlano = type === 'P' || type.startsWith('PLANO');
+
+      // PRODUCED Logic
       const isSent = dashPeriod === 'all' ? true : isDateInRange(b.dateSent, dS, dE);
-      
       if (isSent) {
         sent += b.quantitySent || 0;
         const pQty = (b.quantitySent - (b.totalReceived + (b.totalWaste || 0)));
@@ -289,23 +304,37 @@ export default function App() {
           if (b.dateExpected && b.dateExpected < now && b.status !== 'Concluído') { lateBatches++; latePieces += pQty; }
         }
 
-        // Agregar estatísticas de referências (Modelos Únicos)
-        if (!refStats[b.ref]) {
-            refStats[b.ref] = { count: 0, totalQty: 0, type: b.fabricType };
-        }
-        refStats[b.ref].count += 1;
-        refStats[b.ref].totalQty += (b.quantitySent || 0);
+        // Stats Produção
+        producedStats.totalRefs.add(b.ref);
+        producedStats.totalQty += (b.quantitySent || 0);
+        if (isMalha) { producedStats.malhaRefs.add(b.ref); producedStats.malhaQty += (b.quantitySent || 0); }
+        else if (isPlano) { producedStats.planoRefs.add(b.ref); producedStats.planoQty += (b.quantitySent || 0); }
+
+        // Repetições
+        if (!refRepeatStats[b.ref]) refRepeatStats[b.ref] = { count: 0, totalQty: 0, type: b.fabricType };
+        refRepeatStats[b.ref].count++;
+        refRepeatStats[b.ref].totalQty += (b.quantitySent || 0);
       }
 
+      // DELIVERED Logic
+      let batchDeliveredQty = 0;
       b.returns.forEach(r => {
         const isRet = dashPeriod === 'all' ? true : isDateInRange(r.date, dS, dE);
         if (isRet) {
+          batchDeliveredQty += r.quantity;
           rcv += r.quantity; waste += r.waste; rcvBatches.add(b.id);
           if (!wStats[b.workshop]) wStats[b.workshop] = { count: 0, totalDays: 0, items: 0, batches: new Set() };
           wStats[b.workshop].items += r.quantity; wStats[b.workshop].batches.add(b.id);
           if (b.dateSent && r.date) { const days = Math.max(1, Math.ceil(Math.abs(r.date - b.dateSent) / 86400000)); wStats[b.workshop].count++; wStats[b.workshop].totalDays += days; }
         }
       });
+
+      if (batchDeliveredQty > 0) {
+        deliveredStats.totalRefs.add(b.ref);
+        deliveredStats.totalQty += batchDeliveredQty;
+        if (isMalha) { deliveredStats.malhaRefs.add(b.ref); deliveredStats.malhaQty += batchDeliveredQty; }
+        else if (isPlano) { deliveredStats.planoRefs.add(b.ref); deliveredStats.planoQty += batchDeliveredQty; }
+      }
     });
 
     const ranking = Object.entries(wStats).map(([name, d]) => ({ name, avgDays: d.count > 0 ? (d.totalDays / d.count).toFixed(1) : 'N/A', volume: d.items, uniqueBatches: d.batches.size }));
@@ -316,26 +345,11 @@ export default function App() {
       return a.name.localeCompare(b.name);
     });
     
-    // --- Processar Modelos Únicos ---
-    let uniqueTotal = 0;
-    let uniqueMalha = 0;
-    let uniquePlano = 0;
-    const repeatedRefsList = [];
-
-    Object.entries(refStats).forEach(([ref, data]) => {
-        uniqueTotal++;
-        const type = data.type ? data.type.toUpperCase() : '';
-        if (type === 'M' || type.startsWith('MALHA')) uniqueMalha++;
-        else if (type === 'P' || type.startsWith('PLANO')) uniquePlano++;
-        
-        // Se apareceu mais de uma vez, entra no ranking de repetições
-        if (data.count > 1) {
-            repeatedRefsList.push({ ref, ...data });
-        }
-    });
-    
-    // Ordenar ranking de referências por contagem (desc) e depois volume
-    repeatedRefsList.sort((a, b) => b.count - a.count || b.totalQty - a.totalQty);
+    // Processar lista de repetições
+    const repeatedRefsList = Object.entries(refRepeatStats)
+      .filter(([_, data]) => data.count > 1)
+      .map(([ref, data]) => ({ ref, ...data }))
+      .sort((a, b) => b.count - a.count || b.totalQty - a.totalQty);
 
     const avgPiecesPerBatch = rcvBatches.size > 0 ? (rcv / rcvBatches.size) : 0;
 
@@ -343,7 +357,15 @@ export default function App() {
         sent, rcv, receivedBatchesCount: rcvBatches.size, avgPiecesPerBatch, 
         pendP, pendB, waste, val, avgVal: pendP > 0 ? (val/pendP) : 0, 
         lateBatches, latePieces, ranking: filteredRanking,
-        uniqueTotal, uniqueMalha, uniquePlano, repeatedRefsList 
+        uniqueProduced: {
+            total: producedStats.totalRefs.size, malha: producedStats.malhaRefs.size, plano: producedStats.planoRefs.size,
+            qtyTotal: producedStats.totalQty, qtyMalha: producedStats.malhaQty, qtyPlano: producedStats.planoQty
+        },
+        uniqueDelivered: {
+            total: deliveredStats.totalRefs.size, malha: deliveredStats.malhaRefs.size, plano: deliveredStats.planoRefs.size,
+            qtyTotal: deliveredStats.totalQty, qtyMalha: deliveredStats.malhaQty, qtyPlano: deliveredStats.planoQty
+        },
+        repeatedRefsList 
     };
   }, [batches, dashFilters, dashPeriod, customRange, perfSearch, perfSort]);
 
@@ -451,31 +473,62 @@ export default function App() {
               </Card>
             </div>
 
-            {/* SEÇÃO NOVA: Análise de Modelos */}
+            {/* SEÇÃO NOVA: Análise de Modelos em Duas Vistas */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Card de Modelos Únicos */}
+              
+              {/* Card de Modelos Únicos (Dividido) */}
               <Card className="p-6">
-                <h3 className="text-lg font-bold flex items-center gap-2 mb-4 text-slate-800"><Layers className="w-5 h-5 text-indigo-500" /> Modelos Únicos Produzidos</h3>
-                <div className="grid grid-cols-3 gap-4 text-center">
-                  <div className="p-3 bg-indigo-50 rounded-lg">
-                    <p className="text-xs font-bold text-indigo-400 uppercase">Total</p>
-                    <p className="text-2xl font-bold text-indigo-700">{dashboardData.uniqueTotal}</p>
+                <div className="flex flex-col gap-6">
+                  {/* Produzidos */}
+                  <div>
+                    <h3 className="text-sm font-bold flex items-center gap-2 mb-3 text-slate-700 border-b pb-2"><Layers className="w-4 h-4 text-indigo-500" /> Modelos Únicos Produzidos (Cortados)</h3>
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                      <div className="p-2 bg-indigo-50 rounded-lg">
+                        <p className="text-[10px] font-bold text-indigo-400 uppercase">Total</p>
+                        <p className="text-xl font-bold text-indigo-700">{dashboardData.uniqueProduced.total}</p>
+                        <p className="text-[10px] text-indigo-500 mt-1">{dashboardData.uniqueProduced.qtyTotal} pçs</p>
+                      </div>
+                      <div className="p-2 bg-slate-50 rounded-lg">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase">Malha</p>
+                        <p className="text-xl font-bold text-slate-700">{dashboardData.uniqueProduced.malha}</p>
+                        <p className="text-[10px] text-slate-500 mt-1">{dashboardData.uniqueProduced.qtyMalha} pçs</p>
+                      </div>
+                      <div className="p-2 bg-slate-50 rounded-lg">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase">Plano</p>
+                        <p className="text-xl font-bold text-slate-700">{dashboardData.uniqueProduced.plano}</p>
+                        <p className="text-[10px] text-slate-500 mt-1">{dashboardData.uniqueProduced.qtyPlano} pçs</p>
+                      </div>
+                    </div>
                   </div>
-                  <div className="p-3 bg-slate-50 rounded-lg">
-                    <p className="text-xs font-bold text-slate-400 uppercase">Malha</p>
-                    <p className="text-2xl font-bold text-slate-700">{dashboardData.uniqueMalha}</p>
-                  </div>
-                  <div className="p-3 bg-slate-50 rounded-lg">
-                    <p className="text-xs font-bold text-slate-400 uppercase">Plano</p>
-                    <p className="text-2xl font-bold text-slate-700">{dashboardData.uniquePlano}</p>
+
+                  {/* Entregues */}
+                  <div>
+                    <h3 className="text-sm font-bold flex items-center gap-2 mb-3 text-slate-700 border-b pb-2"><Truck className="w-4 h-4 text-emerald-500" /> Modelos Únicos Entregues (Recebidos)</h3>
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                      <div className="p-2 bg-emerald-50 rounded-lg">
+                        <p className="text-[10px] font-bold text-emerald-400 uppercase">Total</p>
+                        <p className="text-xl font-bold text-emerald-700">{dashboardData.uniqueDelivered.total}</p>
+                        <p className="text-[10px] text-emerald-600 mt-1">{dashboardData.uniqueDelivered.qtyTotal} pçs</p>
+                      </div>
+                      <div className="p-2 bg-slate-50 rounded-lg">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase">Malha</p>
+                        <p className="text-xl font-bold text-slate-700">{dashboardData.uniqueDelivered.malha}</p>
+                        <p className="text-[10px] text-slate-500 mt-1">{dashboardData.uniqueDelivered.qtyMalha} pçs</p>
+                      </div>
+                      <div className="p-2 bg-slate-50 rounded-lg">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase">Plano</p>
+                        <p className="text-xl font-bold text-slate-700">{dashboardData.uniqueDelivered.plano}</p>
+                        <p className="text-[10px] text-slate-500 mt-1">{dashboardData.uniqueDelivered.qtyPlano} pçs</p>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </Card>
 
               {/* Tabela de Repetições */}
               <Card className="p-6">
-                <h3 className="text-lg font-bold flex items-center gap-2 mb-4 text-slate-800"><Copy className="w-5 h-5 text-orange-500" /> Top Referências Repetidas</h3>
-                <div className="overflow-y-auto max-h-[160px]">
+                <h3 className="text-lg font-bold flex items-center gap-2 mb-4 text-slate-800"><Copy className="w-5 h-5 text-orange-500" /> Top Referências Repetidas (Produção)</h3>
+                <div className="overflow-y-auto max-h-[250px]">
                   <table className="w-full text-sm text-left">
                     <thead className="bg-slate-50 text-slate-500 sticky top-0">
                       <tr>
