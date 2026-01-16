@@ -30,7 +30,9 @@ import {
   User,
   FileText,
   Layers,
-  Copy
+  Copy,
+  ArrowUpRight,
+  ArrowDownLeft
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -90,18 +92,39 @@ const Badge = ({ status }) => {
 
 // --- Helpers de Data Robustos ---
 
+// Parseia datas vindas de Input type="date" garantindo fuso local
+const parseInputDate = (dateString) => {
+  if (!dateString) return null;
+  // dateString vem como "YYYY-MM-DD"
+  const [year, month, day] = dateString.split('-').map(Number);
+  // Cria data ao meio-dia local para evitar problemas de fuso
+  return new Date(year, month - 1, day, 12, 0, 0);
+};
+
 const parseDate = (value) => {
   if (!value) return new Date(); 
   if (value instanceof Date) return value;
+
+  // Serial do Excel (Número)
   if (typeof value === 'number') {
     const utcDate = new Date(Math.round((value - 25569) * 86400 * 1000));
-    return new Date(utcDate.getUTCFullYear(), utcDate.getUTCMonth(), utcDate.getUTCDate(), 12, 0, 0);
+    return new Date(
+      utcDate.getUTCFullYear(),
+      utcDate.getUTCMonth(),
+      utcDate.getUTCDate(),
+      12, 0, 0
+    );
   }
+
+  // String (Texto)
   if (typeof value === 'string') {
     const cleanValue = value.trim();
     if (cleanValue.includes('-')) {
       const parts = cleanValue.split('-'); 
-      if (parts.length === 3) return new Date(parts[0], parts[1] - 1, parseInt(parts[2], 10), 12, 0, 0);
+      if (parts.length === 3) {
+        const day = parseInt(parts[2], 10);
+        return new Date(parts[0], parts[1] - 1, day, 12, 0, 0);
+      }
     }
     if (cleanValue.includes('/')) {
       const parts = cleanValue.split('/'); 
@@ -125,8 +148,15 @@ const formatDateForInput = (dateObj) => {
 const isDateInRange = (date, start, end) => {
   if (!date) return false;
   const d = new Date(date); d.setHours(0,0,0,0);
-  if (start) { const s = new Date(start); s.setHours(0,0,0,0); if (d < s) return false; }
-  if (end) { const e = new Date(end); e.setHours(23,59,59,999); if (d > e) return false; }
+  
+  if (start) {
+    const s = new Date(start); s.setHours(0,0,0,0);
+    if (d < s) return false;
+  }
+  if (end) {
+    const e = new Date(end); e.setHours(23,59,59,999);
+    if (d > e) return false;
+  }
   return true;
 };
 
@@ -204,7 +234,6 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     setDataLoading(true);
-    // Alterado para caminho PÚBLICO para compartilhar dados entre usuários
     const q = collection(db, 'artifacts', appId, 'public', 'data', 'production_batches');
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), dateSent: doc.data().dateSent?.toDate(), dateExpected: doc.data().dateExpected?.toDate(), returns: doc.data().returns?.map(r => ({ ...r, date: r.date?.toDate() })) || [] }));
@@ -214,14 +243,43 @@ export default function App() {
   }, [user]);
 
   // --- Logic & Data ---
-  const recalculateBatchStatus = (batch, updatedReturns) => { const totalReceived = updatedReturns.reduce((acc, curr) => acc + (curr.quantity || 0), 0); const totalWaste = updatedReturns.reduce((acc, curr) => acc + (curr.waste || 0), 0); const missing = batch.quantitySent - totalReceived - totalWaste; let status = 'Parcial'; if (missing <= 0) status = 'Concluído'; else if (totalReceived === 0) status = 'Pendente'; return { returns: updatedReturns, totalReceived, totalWaste, status }; };
-  
-  // Handlers CRUD
-  const handleAddBatch = async (e) => { e.preventDefault(); const f = new FormData(e.target); const b = { collectionName: f.get('collectionName').toUpperCase(), workshop: f.get('workshop').toUpperCase(), ref: f.get('ref').toUpperCase(), price: parseFloat(f.get('price')).toFixed(2), fabricType: f.get('fabricType').toUpperCase(), quantitySent: parseInt(f.get('quantitySent')), dateSent: Timestamp.fromDate(parseDate(f.get('dateSent'))), dateExpected: Timestamp.fromDate(parseDate(f.get('dateExpected'))), status: 'Pendente', totalReceived: 0, totalWaste: 0, returns: [], createdAt: Timestamp.now() }; try { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'production_batches'), b); e.target.reset(); alert('Salvo!'); setActiveTab('production'); } catch { alert('Erro.'); } };
-  const handleUpdateBatch = async (e) => { e.preventDefault(); if (!selectedBatch) return; const f = new FormData(e.target); const b = { collectionName: f.get('collectionName').toUpperCase(), workshop: f.get('workshop').toUpperCase(), ref: f.get('ref').toUpperCase(), price: parseFloat(f.get('price')).toFixed(2), fabricType: f.get('fabricType').toUpperCase(), quantitySent: parseInt(f.get('quantitySent')), dateSent: Timestamp.fromDate(parseDate(f.get('dateSent'))), dateExpected: Timestamp.fromDate(parseDate(f.get('dateExpected'))) }; const s = recalculateBatchStatus({ ...selectedBatch, quantitySent: b.quantitySent }, selectedBatch.returns); try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'production_batches', selectedBatch.id), { ...b, ...s }); setIsEditModalOpen(false); setSelectedBatch(null); } catch { alert('Erro.'); } };
-  const handleAddReturn = async (e) => { e.preventDefault(); if (!selectedBatch) return; const f = new FormData(e.target); const r = { id: Date.now().toString(), quantity: parseInt(f.get('qtyReceived')) || 0, waste: parseInt(f.get('waste')) || 0, date: Timestamp.fromDate(parseDate(f.get('returnDate'))), notes: f.get('notes').toUpperCase() }; const u = recalculateBatchStatus(selectedBatch, [...selectedBatch.returns, r]); try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'production_batches', selectedBatch.id), u); setIsReceiveModalOpen(false); setSelectedBatch(null); } catch { alert('Erro.'); } };
-  const handleUpdateReturn = async (e) => { e.preventDefault(); if (!selectedBatch || selectedReturnIndex === null) return; const f = new FormData(e.target); const uR = { ...selectedBatch.returns[selectedReturnIndex], quantity: parseInt(f.get('qtyReceived')) || 0, waste: parseInt(f.get('waste')) || 0, date: Timestamp.fromDate(parseDate(f.get('returnDate'))), notes: f.get('notes').toUpperCase() }; const newR = [...selectedBatch.returns]; newR[selectedReturnIndex] = uR; const u = recalculateBatchStatus(selectedBatch, newR); try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'production_batches', selectedBatch.id), u); setIsEditReturnModalOpen(false); setSelectedBatch(null); setSelectedReturnIndex(null); } catch { alert('Erro.'); } };
-  const handleDeleteReturn = async (b, i) => { if (!confirm('Excluir entrega?')) return; const newR = b.returns.filter((_, idx) => idx !== i); const u = recalculateBatchStatus(b, newR); try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'production_batches', b.id), u); } catch { alert('Erro.'); } };
+  const recalculateBatchStatus = (batch, updatedReturns) => {
+    const totalReceived = updatedReturns.reduce((acc, curr) => acc + (curr.quantity || 0), 0);
+    const totalWaste = updatedReturns.reduce((acc, curr) => acc + (curr.waste || 0), 0);
+    const missing = batch.quantitySent - totalReceived - totalWaste;
+    let status = 'Parcial';
+    if (missing <= 0) status = 'Concluído'; else if (totalReceived === 0) status = 'Pendente';
+    return { returns: updatedReturns, totalReceived, totalWaste, status };
+  };
+
+  const handleAddBatch = async (e) => { 
+    e.preventDefault(); 
+    const f = new FormData(e.target); 
+    const b = { 
+      collectionName: f.get('collectionName').toUpperCase(), 
+      workshop: f.get('workshop').toUpperCase(), 
+      ref: f.get('ref').toUpperCase(), 
+      price: parseFloat(f.get('price')).toFixed(2), 
+      fabricType: f.get('fabricType').toUpperCase(), 
+      quantitySent: parseInt(f.get('quantitySent')), 
+      dateSent: Timestamp.fromDate(parseDate(f.get('dateSent'))), 
+      dateExpected: Timestamp.fromDate(parseDate(f.get('dateExpected'))), 
+      status: 'Pendente', totalReceived: 0, totalWaste: 0, returns: [], createdAt: Timestamp.now() 
+    }; 
+    try { 
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'production_batches'), b); 
+      e.target.reset(); 
+      alert('Corte registrado com sucesso!'); 
+      setActiveTab('production'); 
+    } catch (err) { 
+      console.error("Erro ao salvar:", err); 
+      alert(`Erro ao salvar: ${err.message}.`); 
+    } 
+  };
+  const handleUpdateBatch = async (e) => { e.preventDefault(); if (!selectedBatch) return; const f = new FormData(e.target); const b = { collectionName: f.get('collectionName').toUpperCase(), workshop: f.get('workshop').toUpperCase(), ref: f.get('ref').toUpperCase(), price: parseFloat(f.get('price')).toFixed(2), fabricType: f.get('fabricType').toUpperCase(), quantitySent: parseInt(f.get('quantitySent')), dateSent: Timestamp.fromDate(parseDate(f.get('dateSent'))), dateExpected: Timestamp.fromDate(parseDate(f.get('dateExpected'))) }; const s = recalculateBatchStatus({ ...selectedBatch, quantitySent: b.quantitySent }, selectedBatch.returns); try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'production_batches', selectedBatch.id), { ...b, ...s }); setIsEditModalOpen(false); setSelectedBatch(null); } catch (err) { alert(`Erro: ${err.message}`); } };
+  const handleAddReturn = async (e) => { e.preventDefault(); if (!selectedBatch) return; const f = new FormData(e.target); const r = { id: Date.now().toString(), quantity: parseInt(f.get('qtyReceived')) || 0, waste: parseInt(f.get('waste')) || 0, date: Timestamp.fromDate(parseDate(f.get('returnDate'))), notes: f.get('notes').toUpperCase() }; const u = recalculateBatchStatus(selectedBatch, [...selectedBatch.returns, r]); try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'production_batches', selectedBatch.id), u); setIsReceiveModalOpen(false); setSelectedBatch(null); } catch (err) { alert(`Erro: ${err.message}`); } };
+  const handleUpdateReturn = async (e) => { e.preventDefault(); if (!selectedBatch || selectedReturnIndex === null) return; const f = new FormData(e.target); const uR = { ...selectedBatch.returns[selectedReturnIndex], quantity: parseInt(f.get('qtyReceived')) || 0, waste: parseInt(f.get('waste')) || 0, date: Timestamp.fromDate(parseDate(f.get('returnDate'))), notes: f.get('notes').toUpperCase() }; const newR = [...selectedBatch.returns]; newR[selectedReturnIndex] = uR; const u = recalculateBatchStatus(selectedBatch, newR); try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'production_batches', selectedBatch.id), u); setIsEditReturnModalOpen(false); setSelectedBatch(null); setSelectedReturnIndex(null); } catch (err) { alert(`Erro: ${err.message}`); } };
+  const handleDeleteReturn = async (b, i) => { if (!confirm('Excluir entrega?')) return; const newR = b.returns.filter((_, idx) => idx !== i); const u = recalculateBatchStatus(b, newR); try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'production_batches', b.id), u); } catch { alert(`Erro: ${err.message}`); } };
   const handleDelete = async (id) => { if (confirm('Excluir registro?')) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'production_batches', id)); };
   
   // Actions
@@ -229,7 +287,7 @@ export default function App() {
   const handleLogout = async () => { await signOut(auth); setActiveTab('production'); };
   const handleUpperCaseInput = (e) => e.target.value = e.target.value.toUpperCase();
   const handleImportClick = () => fileInputRef.current.click();
-  const handleFileChange = async (e) => { const file = e.target.files[0]; if (!file || !window.XLSX) return; const reader = new FileReader(); reader.onload = async (evt) => { const bstr = evt.target.result; const wb = window.XLSX.read(bstr, { type: 'binary' }); const ws = wb.Sheets[wb.SheetNames[0]]; const data = window.XLSX.utils.sheet_to_json(ws); if (confirm(`Importar ${data.length} registros?`)) { let c = 0; for (const row of data) { try { const nr = {}; Object.keys(row).forEach(k => nr[k.toString().trim().toLowerCase().replace(/[_\s]/g, '')] = row[k]); if (!nr['colecao'] || !nr['oficina'] || !nr['ref']) continue; const dS = parseDate(nr['datasaida']); const dE = parseDate(nr['previsaoentrada']); const tR = parseInt(nr['totalrecebido']||0, 10); const tW = parseInt(nr['totalperda']||0, 10); const sI = nr['status']; const lDR = nr['dataultimaentrega']; const ret = []; if(tR>0||tW>0){ const dD = lDR ? parseDate(lDR) : new Date(); ret.push({ id: `imp-${Date.now()}-${Math.random()}`, quantity: tR, waste: tW, date: Timestamp.fromDate(dD), notes: 'IMPORT' }); } const qE = parseInt(nr['qtdenviada']||0, 10); let fS = 'Pendente'; if (sI) fS = sI; else { const m = qE - tR - tW; if(m<=0) fS='Concluído'; else if(tR>0) fS='Parcial'; } const nB = { collectionName: String(nr['colecao']).toUpperCase(), workshop: String(nr['oficina']).toUpperCase(), ref: String(nr['ref']).toUpperCase(), price: parseFloat(nr['precounit']||0).toFixed(2), fabricType: String(nr['tecido']||'OUTRO').toUpperCase(), quantitySent: qE, dateSent: Timestamp.fromDate(dS), dateExpected: Timestamp.fromDate(dE), status: fS, totalReceived: tR, totalWaste: tW, returns: ret, createdAt: Timestamp.now() }; await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'production_batches'), nB); c++; } catch (err) { console.error(err); } } alert(`${c} importados!`); if(fileInputRef.current) fileInputRef.current.value=''; setActiveTab('production'); } }; reader.readAsBinaryString(file); };
+  const handleFileChange = async (e) => { const file = e.target.files[0]; if (!file || !window.XLSX) return; const reader = new FileReader(); reader.readAsArrayBuffer(file); reader.onload = async (evt) => { const arrayBuffer = evt.target.result; const wb = window.XLSX.read(arrayBuffer, { type: 'array' }); const ws = wb.Sheets[wb.SheetNames[0]]; const data = window.XLSX.utils.sheet_to_json(ws); if (confirm(`Importar ${data.length} registros?`)) { let c = 0; let eCount = 0; for (const row of data) { try { const nr = {}; Object.keys(row).forEach(k => nr[k.toString().trim().toLowerCase().replace(/[_\s]/g, '')] = row[k]); if (!nr['colecao'] || !nr['oficina'] || !nr['ref']) continue; const dS = parseDate(nr['datasaida']); const dE = parseDate(nr['previsaoentrada']); const tR = parseInt(nr['totalrecebido']||0, 10); const tW = parseInt(nr['totalperda']||0, 10); const sI = nr['status']; const lDR = nr['dataultimaentrega']; const ret = []; if(tR>0||tW>0){ const dD = lDR ? parseDate(lDR) : new Date(); ret.push({ id: `imp-${Date.now()}-${Math.random()}`, quantity: tR, waste: tW, date: Timestamp.fromDate(dD), notes: 'IMPORT' }); } const qE = parseInt(nr['qtdenviada']||0, 10); let fS = 'Pendente'; if (sI) fS = sI; else { const m = qE - tR - tW; if(m<=0) fS='Concluído'; else if(tR>0) fS='Parcial'; } const nB = { collectionName: String(nr['colecao']).toUpperCase(), workshop: String(nr['oficina']).toUpperCase(), ref: String(nr['ref']).toUpperCase(), price: parseFloat(nr['precounit']||0).toFixed(2), fabricType: String(nr['tecido']||'OUTRO').toUpperCase(), quantitySent: qE, dateSent: Timestamp.fromDate(dS), dateExpected: Timestamp.fromDate(dE), status: fS, totalReceived: tR, totalWaste: tW, returns: ret, createdAt: Timestamp.now() }; await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'production_batches'), nB); c++; } catch (err) { eCount++; console.error(err); } } alert(`${c} importados! ${eCount>0?`(${eCount} erros)`:''}`); if(fileInputRef.current) fileInputRef.current.value=''; setActiveTab('production'); } }; };
   const handleExportExcel = () => { if (!window.XLSX) { alert("Aguarde biblioteca..."); return; } const data = batches.map(b => { let lD = ''; if(b.returns?.length>0) { const sR = [...b.returns].sort((a,b)=>b.date-a.date); if(sR[0]?.date) lD = formatDateForInput(sR[0].date); } return { Colecao: b.collectionName, Oficina: b.workshop, Ref: b.ref, Preco_Unit: b.price, Tecido: b.fabricType, Qtd_Enviada: b.quantitySent, Data_Saida: b.dateSent ? formatDateForInput(b.dateSent) : '', Previsao_Entrada: b.dateExpected ? formatDateForInput(b.dateExpected) : '', Data_Ultima_Entrega: lD, Status: b.status, Total_Recebido: b.totalReceived, Total_Perda: b.totalWaste, Falta: b.quantitySent - b.totalReceived - b.totalWaste }; }); const ws = window.XLSX.utils.json_to_sheet(data); const wb = window.XLSX.utils.book_new(); window.XLSX.utils.book_append_sheet(wb, ws, "Cortes"); window.XLSX.writeFile(wb, `Cortes_${new Date().toISOString().split('T')[0]}.xlsx`); };
 
   const uniqueCollections = useMemo(() => [...new Set(batches.map(b => b.collectionName))].sort(), [batches]);
@@ -252,8 +310,13 @@ export default function App() {
   const handleGenerateLateReport = () => {
     if (!window.jspdf) { alert("Aguarde biblioteca PDF..."); return; }
     const { jsPDF } = window.jspdf; const doc = new jsPDF(); const now = new Date();
-    const lateBatches = filteredProduction.filter(b => { if (b.status === 'Concluído' || !b.dateExpected) return false; const dE = new Date(b.dateExpected); dE.setHours(23, 59, 59, 999); return dE < now; });
-    if (lateBatches.length === 0) { alert("Nenhum atraso encontrado."); return; }
+    // Usa a lista filtrada para o PDF
+    const lateBatches = filteredProduction.filter(b => { 
+        if (b.status === 'Concluído' || !b.dateExpected) return false; 
+        const dE = new Date(b.dateExpected); dE.setHours(23, 59, 59, 999); 
+        return dE < now; 
+    });
+    if (lateBatches.length === 0) { alert("Nenhum atraso encontrado com os filtros atuais."); return; }
     const grouped = {}; lateBatches.forEach(b => { const w = b.workshop || 'SEM OFICINA'; if (!grouped[w]) grouped[w] = []; grouped[w].push(b); });
     
     // Header PDF
@@ -273,21 +336,31 @@ export default function App() {
     const now = new Date();
     let dS = null, dE = null;
     const y = now.getFullYear(), m = now.getMonth();
+    
+    // CORREÇÃO DATA FILTER CUSTOM
     if (dashPeriod === 'thisMonth') { dS = new Date(y, m, 1); dE = new Date(y, m + 1, 0); }
     else if (dashPeriod === 'lastMonth') { dS = new Date(y, m - 1, 1); dE = new Date(y, m, 0); }
     else if (dashPeriod === 'thisYear') { dS = new Date(y, 0, 1); dE = new Date(y, 11, 31); }
-    else if (dashPeriod === 'custom') { dS = customRange.start ? new Date(customRange.start) : null; dE = customRange.end ? new Date(customRange.end) : null; }
+    else if (dashPeriod === 'custom') { 
+        // Usa parseInputDate aqui para garantir meio-dia
+        dS = parseInputDate(customRange.start); 
+        dE = parseInputDate(customRange.end);
+        // Garante final do dia para a data final
+        if (dE) dE.setHours(23, 59, 59, 999);
+    }
 
     const matches = (b) => (dashFilters.collection ? b.collectionName === dashFilters.collection : true) && (dashFilters.fabric ? b.fabricType === dashFilters.fabric : true) && (dashFilters.workshop ? b.workshop === dashFilters.workshop : true);
     
     let sent=0, rcv=0, val=0, lateBatches=0, latePieces=0, waste=0, pendP=0, pendB=0;
     const rcvBatches = new Set();
     const wStats = {};
-    
-    // --- Lógica de Modelos Únicos e Repetições ---
     const producedStats = { totalRefs: new Set(), malhaRefs: new Set(), planoRefs: new Set(), totalQty: 0, malhaQty: 0, planoQty: 0 };
     const deliveredStats = { totalRefs: new Set(), malhaRefs: new Set(), planoRefs: new Set(), totalQty: 0, malhaQty: 0, planoQty: 0 };
     const refRepeatStats = {};
+
+    // Listas Detalhadas (Novas)
+    const sentListMap = {}; // { Ref: Qty }
+    const receivedListMap = {}; // { Ref: Qty }
 
     batches.forEach(b => {
       if (!matches(b)) return;
@@ -295,10 +368,12 @@ export default function App() {
       const isMalha = type === 'M' || type.startsWith('MALHA');
       const isPlano = type === 'P' || type.startsWith('PLANO');
 
-      // PRODUCED Logic
+      // 1. ANÁLISE DE SAÍDA (ENVIADOS)
       const isSent = dashPeriod === 'all' ? true : isDateInRange(b.dateSent, dS, dE);
+      
       if (isSent) {
-        sent += b.quantitySent || 0;
+        const qSent = b.quantitySent || 0;
+        sent += qSent;
         const pQty = (b.quantitySent - (b.totalReceived + (b.totalWaste || 0)));
         if (pQty > 0) {
           val += pQty * parseFloat(b.price); pendP += pQty; pendB++;
@@ -307,26 +382,35 @@ export default function App() {
 
         // Stats Produção
         producedStats.totalRefs.add(b.ref);
-        producedStats.totalQty += (b.quantitySent || 0);
-        if (isMalha) { producedStats.malhaRefs.add(b.ref); producedStats.malhaQty += (b.quantitySent || 0); }
-        else if (isPlano) { producedStats.planoRefs.add(b.ref); producedStats.planoQty += (b.quantitySent || 0); }
+        producedStats.totalQty += qSent;
+        if (isMalha) { producedStats.malhaRefs.add(b.ref); producedStats.malhaQty += qSent; }
+        else if (isPlano) { producedStats.planoRefs.add(b.ref); producedStats.planoQty += qSent; }
+
+        // Listagem Detalhada de Saída
+        if (!sentListMap[b.ref]) sentListMap[b.ref] = 0;
+        sentListMap[b.ref] += qSent;
 
         // Repetições
         if (!refRepeatStats[b.ref]) refRepeatStats[b.ref] = { count: 0, totalQty: 0, type: b.fabricType };
         refRepeatStats[b.ref].count++;
-        refRepeatStats[b.ref].totalQty += (b.quantitySent || 0);
+        refRepeatStats[b.ref].totalQty += qSent;
       }
 
-      // DELIVERED Logic
+      // 2. ANÁLISE DE ENTRADA (RECEBIDOS)
       let batchDeliveredQty = 0;
       b.returns.forEach(r => {
         const isRet = dashPeriod === 'all' ? true : isDateInRange(r.date, dS, dE);
         if (isRet) {
           batchDeliveredQty += r.quantity;
           rcv += r.quantity; waste += r.waste; rcvBatches.add(b.id);
+          
           if (!wStats[b.workshop]) wStats[b.workshop] = { count: 0, totalDays: 0, items: 0, batches: new Set() };
           wStats[b.workshop].items += r.quantity; wStats[b.workshop].batches.add(b.id);
           if (b.dateSent && r.date) { const days = Math.max(1, Math.ceil(Math.abs(r.date - b.dateSent) / 86400000)); wStats[b.workshop].count++; wStats[b.workshop].totalDays += days; }
+
+          // Listagem Detalhada de Entrada
+          if (!receivedListMap[b.ref]) receivedListMap[b.ref] = 0;
+          receivedListMap[b.ref] += r.quantity;
         }
       });
 
@@ -346,11 +430,10 @@ export default function App() {
       return a.name.localeCompare(b.name);
     });
     
-    // Processar lista de repetições
-    const repeatedRefsList = Object.entries(refRepeatStats)
-      .filter(([_, data]) => data.count > 1)
-      .map(([ref, data]) => ({ ref, ...data }))
-      .sort((a, b) => b.count - a.count || b.totalQty - a.totalQty);
+    // Arrays para as tabelas detalhadas
+    const sentList = Object.entries(sentListMap).map(([ref, qty]) => ({ ref, qty })).sort((a, b) => b.qty - a.qty);
+    const receivedList = Object.entries(receivedListMap).map(([ref, qty]) => ({ ref, qty })).sort((a, b) => b.qty - a.qty);
+    const repeatedRefsList = Object.entries(refRepeatStats).filter(([_, data]) => data.count > 1).map(([ref, data]) => ({ ref, ...data })).sort((a, b) => b.count - a.count || b.totalQty - a.totalQty);
 
     const avgPiecesPerBatch = rcvBatches.size > 0 ? (rcv / rcvBatches.size) : 0;
 
@@ -358,15 +441,9 @@ export default function App() {
         sent, rcv, receivedBatchesCount: rcvBatches.size, avgPiecesPerBatch, 
         pendP, pendB, waste, val, avgVal: pendP > 0 ? (val/pendP) : 0, 
         lateBatches, latePieces, ranking: filteredRanking,
-        uniqueProduced: {
-            total: producedStats.totalRefs.size, malha: producedStats.malhaRefs.size, plano: producedStats.planoRefs.size,
-            qtyTotal: producedStats.totalQty, qtyMalha: producedStats.malhaQty, qtyPlano: producedStats.planoQty
-        },
-        uniqueDelivered: {
-            total: deliveredStats.totalRefs.size, malha: deliveredStats.malhaRefs.size, plano: deliveredStats.planoRefs.size,
-            qtyTotal: deliveredStats.totalQty, qtyMalha: deliveredStats.malhaQty, qtyPlano: deliveredStats.planoQty
-        },
-        repeatedRefsList 
+        uniqueProduced: { total: producedStats.totalRefs.size, malha: producedStats.malhaRefs.size, plano: producedStats.planoRefs.size, qtyTotal: producedStats.totalQty, qtyMalha: producedStats.malhaQty, qtyPlano: producedStats.planoQty },
+        uniqueDelivered: { total: deliveredStats.totalRefs.size, malha: deliveredStats.malhaRefs.size, plano: deliveredStats.planoRefs.size, qtyTotal: deliveredStats.totalQty, qtyMalha: deliveredStats.malhaQty, qtyPlano: deliveredStats.planoQty },
+        repeatedRefsList, sentList, receivedList
     };
   }, [batches, dashFilters, dashPeriod, customRange, perfSearch, perfSort]);
 
@@ -474,81 +551,90 @@ export default function App() {
               </Card>
             </div>
 
-            {/* SEÇÃO NOVA: Análise de Modelos em Duas Vistas */}
+            {/* SEÇÃO NOVA: Fluxo de Peças (Enviadas vs Recebidas) */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              
-              {/* Card de Modelos Únicos (Dividido) */}
-              <Card className="p-6">
-                <div className="flex flex-col gap-6">
-                  {/* Produzidos */}
-                  <div>
-                    <h3 className="text-sm font-bold flex items-center gap-2 mb-3 text-slate-700 border-b pb-2"><Layers className="w-4 h-4 text-indigo-500" /> Modelos Únicos Produzidos (Cortados)</h3>
-                    <div className="grid grid-cols-3 gap-4 text-center">
-                      <div className="p-2 bg-indigo-50 rounded-lg">
-                        <p className="text-[10px] font-bold text-indigo-400 uppercase">Total</p>
-                        <p className="text-xl font-bold text-indigo-700">{dashboardData.uniqueProduced.total}</p>
-                        <p className="text-[10px] text-indigo-500 mt-1">{dashboardData.uniqueProduced.qtyTotal} pçs</p>
-                      </div>
-                      <div className="p-2 bg-slate-50 rounded-lg">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase">Malha</p>
-                        <p className="text-xl font-bold text-slate-700">{dashboardData.uniqueProduced.malha}</p>
-                        <p className="text-[10px] text-slate-500 mt-1">{dashboardData.uniqueProduced.qtyMalha} pçs</p>
-                      </div>
-                      <div className="p-2 bg-slate-50 rounded-lg">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase">Plano</p>
-                        <p className="text-xl font-bold text-slate-700">{dashboardData.uniqueProduced.plano}</p>
-                        <p className="text-[10px] text-slate-500 mt-1">{dashboardData.uniqueProduced.qtyPlano} pçs</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Entregues */}
-                  <div>
-                    <h3 className="text-sm font-bold flex items-center gap-2 mb-3 text-slate-700 border-b pb-2"><Truck className="w-4 h-4 text-emerald-500" /> Modelos Únicos Entregues (Recebidos)</h3>
-                    <div className="grid grid-cols-3 gap-4 text-center">
-                      <div className="p-2 bg-emerald-50 rounded-lg">
-                        <p className="text-[10px] font-bold text-emerald-400 uppercase">Total</p>
-                        <p className="text-xl font-bold text-emerald-700">{dashboardData.uniqueDelivered.total}</p>
-                        <p className="text-[10px] text-emerald-600 mt-1">{dashboardData.uniqueDelivered.qtyTotal} pçs</p>
-                      </div>
-                      <div className="p-2 bg-slate-50 rounded-lg">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase">Malha</p>
-                        <p className="text-xl font-bold text-slate-700">{dashboardData.uniqueDelivered.malha}</p>
-                        <p className="text-[10px] text-slate-500 mt-1">{dashboardData.uniqueDelivered.qtyMalha} pçs</p>
-                      </div>
-                      <div className="p-2 bg-slate-50 rounded-lg">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase">Plano</p>
-                        <p className="text-xl font-bold text-slate-700">{dashboardData.uniqueDelivered.plano}</p>
-                        <p className="text-[10px] text-slate-500 mt-1">{dashboardData.uniqueDelivered.qtyPlano} pçs</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </Card>
-
-              {/* Tabela de Repetições */}
-              <Card className="p-6">
-                <h3 className="text-lg font-bold flex items-center gap-2 mb-4 text-slate-800"><Copy className="w-5 h-5 text-orange-500" /> Top Referências Repetidas (Produção)</h3>
-                <div className="overflow-y-auto max-h-[250px]">
+              {/* Enviadas no Período */}
+              <Card className="p-6 h-[400px] flex flex-col">
+                <h3 className="text-lg font-bold flex items-center gap-2 mb-4 text-slate-800 border-b pb-2">
+                  <ArrowUpRight className="w-5 h-5 text-blue-500" /> Enviadas no Período
+                </h3>
+                <div className="overflow-y-auto flex-1">
                   <table className="w-full text-sm text-left">
                     <thead className="bg-slate-50 text-slate-500 sticky top-0">
                       <tr>
                         <th className="px-4 py-2">Ref</th>
-                        <th className="px-4 py-2 text-center">Repetições</th>
-                        <th className="px-4 py-2 text-right">Volume Total</th>
+                        <th className="px-4 py-2 text-right">Qtd Enviada</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {dashboardData.repeatedRefsList.length > 0 ? dashboardData.repeatedRefsList.slice(0, 10).map((item, idx) => (
+                      {dashboardData.sentList.length > 0 ? dashboardData.sentList.map((item, idx) => (
                         <tr key={idx} className="hover:bg-slate-50">
-                          <td className="px-4 py-2 font-medium">{item.ref} <span className="text-xs text-slate-400 font-normal">({item.type})</span></td>
-                          <td className="px-4 py-2 text-center font-bold text-orange-600">{item.count}x</td>
-                          <td className="px-4 py-2 text-right text-slate-600">{item.totalQty} pçs</td>
+                          <td className="px-4 py-2 font-medium">{item.ref}</td>
+                          <td className="px-4 py-2 text-right font-bold text-blue-600">{item.qty}</td>
                         </tr>
                       )) : (
-                        <tr><td colSpan="3" className="px-4 py-8 text-center text-slate-400">Nenhuma repetição encontrada no período.</td></tr>
+                        <tr><td colSpan="2" className="px-4 py-8 text-center text-slate-400">Nenhum envio no período.</td></tr>
                       )}
                     </tbody>
+                  </table>
+                </div>
+              </Card>
+
+              {/* Entradas no Período */}
+              <Card className="p-6 h-[400px] flex flex-col">
+                <h3 className="text-lg font-bold flex items-center gap-2 mb-4 text-slate-800 border-b pb-2">
+                  <ArrowDownLeft className="w-5 h-5 text-emerald-500" /> Entradas no Período
+                </h3>
+                <div className="overflow-y-auto flex-1">
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-slate-50 text-slate-500 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-2">Ref</th>
+                        <th className="px-4 py-2 text-right">Qtd Recebida</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {dashboardData.receivedList.length > 0 ? dashboardData.receivedList.map((item, idx) => (
+                        <tr key={idx} className="hover:bg-slate-50">
+                          <td className="px-4 py-2 font-medium">{item.ref}</td>
+                          <td className="px-4 py-2 text-right font-bold text-emerald-600">{item.qty}</td>
+                        </tr>
+                      )) : (
+                        <tr><td colSpan="2" className="px-4 py-8 text-center text-slate-400">Nenhuma entrada no período.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </div>
+
+            {/* SEÇÃO: Análise de Modelos */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <Card className="p-6">
+                <div className="flex flex-col gap-6">
+                  <div>
+                    <h3 className="text-sm font-bold flex items-center gap-2 mb-3 text-slate-700 border-b pb-2"><Layers className="w-4 h-4 text-indigo-500" /> Modelos Únicos Produzidos</h3>
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                      <div className="p-2 bg-indigo-50 rounded-lg"><p className="text-[10px] font-bold text-indigo-400 uppercase">Total</p><p className="text-xl font-bold text-indigo-700">{dashboardData.uniqueProduced.total}</p><p className="text-[10px] text-indigo-500 mt-1">{dashboardData.uniqueProduced.qtyTotal} pçs</p></div>
+                      <div className="p-2 bg-slate-50 rounded-lg"><p className="text-[10px] font-bold text-slate-400 uppercase">Malha</p><p className="text-xl font-bold text-slate-700">{dashboardData.uniqueProduced.malha}</p><p className="text-[10px] text-slate-500 mt-1">{dashboardData.uniqueProduced.qtyMalha} pçs</p></div>
+                      <div className="p-2 bg-slate-50 rounded-lg"><p className="text-[10px] font-bold text-slate-400 uppercase">Plano</p><p className="text-xl font-bold text-slate-700">{dashboardData.uniqueProduced.plano}</p><p className="text-[10px] text-slate-500 mt-1">{dashboardData.uniqueProduced.qtyPlano} pçs</p></div>
+                    </div>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold flex items-center gap-2 mb-3 text-slate-700 border-b pb-2"><Truck className="w-4 h-4 text-emerald-500" /> Modelos Únicos Entregues</h3>
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                      <div className="p-2 bg-emerald-50 rounded-lg"><p className="text-[10px] font-bold text-emerald-400 uppercase">Total</p><p className="text-xl font-bold text-emerald-700">{dashboardData.uniqueDelivered.total}</p><p className="text-[10px] text-emerald-600 mt-1">{dashboardData.uniqueDelivered.qtyTotal} pçs</p></div>
+                      <div className="p-2 bg-slate-50 rounded-lg"><p className="text-[10px] font-bold text-slate-400 uppercase">Malha</p><p className="text-xl font-bold text-slate-700">{dashboardData.uniqueDelivered.malha}</p><p className="text-[10px] text-slate-500 mt-1">{dashboardData.uniqueDelivered.qtyMalha} pçs</p></div>
+                      <div className="p-2 bg-slate-50 rounded-lg"><p className="text-[10px] font-bold text-slate-400 uppercase">Plano</p><p className="text-xl font-bold text-slate-700">{dashboardData.uniqueDelivered.plano}</p><p className="text-[10px] text-slate-500 mt-1">{dashboardData.uniqueDelivered.qtyPlano} pçs</p></div>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+              <Card className="p-6">
+                <h3 className="text-lg font-bold flex items-center gap-2 mb-4 text-slate-800"><Copy className="w-5 h-5 text-orange-500" /> Top Referências Repetidas (Produção)</h3>
+                <div className="overflow-y-auto max-h-[250px]">
+                  <table className="w-full text-sm text-left"><thead className="bg-slate-50 text-slate-500 sticky top-0"><tr><th className="px-4 py-2">Ref</th><th className="px-4 py-2 text-center">Repetições</th><th className="px-4 py-2 text-right">Volume Total</th></tr></thead>
+                    <tbody className="divide-y divide-slate-100">{dashboardData.repeatedRefsList.length > 0 ? dashboardData.repeatedRefsList.slice(0, 10).map((item, idx) => (<tr key={idx} className="hover:bg-slate-50"><td className="px-4 py-2 font-medium">{item.ref} <span className="text-xs text-slate-400 font-normal">({item.type})</span></td><td className="px-4 py-2 text-center font-bold text-orange-600">{item.count}x</td><td className="px-4 py-2 text-right text-slate-600">{item.totalQty} pçs</td></tr>)) : (<tr><td colSpan="3" className="px-4 py-8 text-center text-slate-400">Nenhuma repetição encontrada no período.</td></tr>)}</tbody>
                   </table>
                 </div>
               </Card>
